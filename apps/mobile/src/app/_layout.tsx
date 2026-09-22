@@ -20,6 +20,15 @@ function RootNavigator() {
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
       <Stack.Protected guard={fieldUser}>
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen
+          name="site/[id]"
+          options={{
+            headerShown: true,
+            title: 'Site',
+            headerStyle: { backgroundColor: colors.navy },
+            headerTintColor: colors.white,
+          }}
+        />
       </Stack.Protected>
       <Stack.Protected guard={signedIn && !fieldUser}>
         <Stack.Screen name="account-status" />

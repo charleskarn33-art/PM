@@ -88,3 +88,14 @@ grant usage on schema public to anon, authenticated, service_role;
 alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
 alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
 alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+
+-- PostgREST connects as `authenticator` and switches to anon/authenticated
+-- per request based on the JWT role claim (as on Supabase).
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'authenticator') then
+    create role authenticator login noinherit password 'authenticator';
+  end if;
+end;
+$$;
+grant anon, authenticated, service_role to authenticator;

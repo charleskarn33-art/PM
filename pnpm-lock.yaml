@@ -173,6 +173,12 @@ importers:
 
   supabase/tests:
     devDependencies:
+      '@ipt/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@supabase/postgrest-js':
+        specifier: ^2.117.0
+        version: 2.117.0
       '@types/node':
         specifier: ^22.18.0
         version: 22.20.4

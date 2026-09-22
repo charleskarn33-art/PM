@@ -236,7 +236,9 @@ function render({ enums, enumNames, columns, fks, functions, tableNames }) {
   out.push('};');
   out.push('');
   out.push("type PublicSchema = Database['public'];");
-  out.push("export type Tables<T extends keyof PublicSchema['Tables']> = PublicSchema['Tables'][T]['Row'];");
+  out.push("type PublicTablesAndViews = PublicSchema['Tables'] & PublicSchema['Views'];");
+  out.push('/** Row type of a table or view. */');
+  out.push('export type Tables<T extends keyof PublicTablesAndViews> = PublicTablesAndViews[T][\'Row\'];');
   out.push("export type TablesInsert<T extends keyof PublicSchema['Tables']> = PublicSchema['Tables'][T]['Insert'];");
   out.push("export type TablesUpdate<T extends keyof PublicSchema['Tables']> = PublicSchema['Tables'][T]['Update'];");
   out.push("export type Enums<T extends keyof PublicSchema['Enums']> = PublicSchema['Enums'][T];");

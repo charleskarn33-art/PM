@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createEncryptedStorage, secureKeyName, type Cipher } from './encrypted-storage';
 import { readMobileEnv } from './env';
+import { mapsUrl, webMapsUrl } from './maps';
 import { utf8Decode, utf8Encode } from './utf8';
 
 // Node AES-256-GCM stand-in for the native expo-crypto implementation.
@@ -106,5 +107,13 @@ describe('readMobileEnv', () => {
       EXPO_PUBLIC_SUPABASE_ANON_KEY: 'sb_secret_123',
     });
     expect(secret).toMatchObject({ ok: false, error: expect.stringMatching(/secret/) });
+  });
+});
+
+describe('maps links', () => {
+  it('builds platform deep links with an encoded label', () => {
+    expect(mapsUrl('ios', 7.32, -11.21, '1301 Tienii')).toBe('maps:0,0?q=1301%20Tienii&ll=7.32,-11.21');
+    expect(mapsUrl('android', 7.32, -11.21, '1301 Tienii')).toBe('geo:7.32,-11.21?q=7.32,-11.21(1301%20Tienii)');
+    expect(webMapsUrl(7.32, -11.21)).toBe('https://www.google.com/maps/search/?api=1&query=7.32,-11.21');
   });
 });

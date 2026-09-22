@@ -36,16 +36,26 @@ Public sign-up is disabled. Create the first user in **Authentication → Users 
 select private.bootstrap_super_admin('admin@your-domain.com');
 ```
 
-Every other user created afterwards starts **inactive** (role `viewer`) until a Super Admin activates them and assigns a role (`public.admin_update_user`). The user administration screens arrive in Phase 2; until then use the SQL editor:
+After that, manage everything in the web portal:
 
-```sql
--- run as the Super Admin via the app, or in the SQL editor:
-select public.admin_update_user('<user uuid>', 'technician', true, '<region uuid>');
-insert into public.user_region_scopes (profile_id, region_id) values ('<supervisor uuid>', '<region uuid>');
-insert into public.site_assignments (site_id, technician_id) values ('<site uuid>', '<technician uuid>');
-```
+- **Admin → Organization**: regions, clusters, counties.
+- **Sites**: create/edit sites (Super Admin), assign technicians (Super Admin / Regional Supervisor).
+- **Admin → Users**: invite users, set role, activation, home region, region scope (managers and supervisors), technician supervisor/employee code.
 
-> `admin_update_user` checks that the caller is a Super Admin. From the SQL editor (no JWT) use a direct `update public.profiles …` instead.
+Users created directly in the Supabase dashboard start **inactive** (role `viewer`) until a Super Admin activates them in Admin → Users.
+
+### Invitations and password reset (Auth email templates)
+
+Invitations use the Auth admin API, which needs the **secret (service-role) key on the web server only**: set `SUPABASE_SECRET_KEY` in the server environment (never with a `NEXT_PUBLIC_` prefix — the build fails if you do). Without it the invite page is disabled with an explanation.
+
+The web app verifies email links server-side at `/auth/confirm`. In **Authentication → Email Templates**, change the links to:
+
+| Template | Link |
+|---|---|
+| Invite user | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/auth/set-password` |
+| Reset password | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/auth/set-password` |
+
+Set **Authentication → URL configuration → Site URL** to the portal URL, and `SITE_URL` in the web app environment to the same value.
 
 ## 2. Web app (`apps/web`)
 
@@ -54,7 +64,7 @@ cp apps/web/.env.example apps/web/.env.local   # set URL + publishable key
 pnpm dev:web                                   # http://localhost:3000
 ```
 
-Deploy on **Vercel**: root directory `apps/web`, framework Next.js, install command `pnpm install`, and environment variables `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Add the production URL to Supabase **Auth → URL configuration**.
+Deploy on **Vercel**: root directory `apps/web`, framework Next.js, install command `pnpm install`, and environment variables `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SITE_URL` and (server-only, for invitations) `SUPABASE_SECRET_KEY`. Add the production URL to Supabase **Auth → URL configuration**.
 
 ## 3. Mobile app (`apps/mobile`)
 
@@ -71,10 +81,13 @@ The app uses native modules (SecureStore, SQLite, Crypto). Use a development bui
 pnpm typecheck          # all packages
 pnpm lint
 pnpm test               # unit tests (shared, web, mobile)
-pnpm test:db            # migrations + RLS + workflow tests on PostgreSQL
+pnpm tools:postgrest    # once: downloads PostgREST into .tools/ for the API tests
+pnpm test:db            # migrations + RLS + workflow tests on PostgreSQL, API tests via PostgREST
 pnpm db:types           # regenerate packages/shared/src/database.types.ts after changing migrations
 pnpm --filter @ipt/mobile bundle:check   # Metro Android bundle
 ```
+
+The API tests start PostgREST (the server Supabase uses) against the test database and run the web and mobile query code with a signed JWT per role; every request uses `Prefer: tx=rollback`, so they change nothing. Without the binary they are skipped with a notice.
 
 `pnpm test:db` uses `TEST_DATABASE_ADMIN_URL` (default `postgres://postgres:postgres@localhost:5432/postgres`) and creates/drops the database `ipt_pm_test`. `pnpm db:types` reads from that database, so run `pnpm test:db` first.
 

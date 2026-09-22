@@ -12,6 +12,8 @@
     "@types/pg": "^8.15.5",
     "pg": "^8.16.3",
     "typescript": "5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "@supabase/postgrest-js": "^2.117.0",
+    "@ipt/shared": "workspace:*"
   }
 }

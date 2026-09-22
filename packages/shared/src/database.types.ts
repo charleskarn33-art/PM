@@ -2609,8 +2609,85 @@ export type Database = {
         ];
       };
     };
-    Views: { [_ in never]: never };
+    Views: {
+      site_overview: {
+        Row: {
+          id: string | null;
+          site_code: string | null;
+          site_name: string | null;
+          status: Database['public']['Enums']['site_status'] | null;
+          is_demo: boolean | null;
+          site_type: string | null;
+          power_configuration: string | null;
+          generator_available: boolean | null;
+          solar_available: boolean | null;
+          battery_available: boolean | null;
+          grid_available: boolean | null;
+          latitude: number | null;
+          longitude: number | null;
+          address: string | null;
+          geofence_radius_m: number | null;
+          region_id: string | null;
+          region_name: string | null;
+          cluster_id: string | null;
+          cluster_name: string | null;
+          county_id: string | null;
+          county_name: string | null;
+          supervisor_id: string | null;
+          supervisor_name: string | null;
+          technician_names: string | null;
+          last_pm_at: string | null;
+          next_pm_due: string | null;
+          next_pm_status: Database['public']['Enums']['pm_status'] | null;
+          open_failures: number | null;
+          open_corrective_actions: number | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Relationships: [];
+      };
+      supervisor_overview: {
+        Row: {
+          id: string | null;
+          full_name: string | null;
+          email: string | null;
+          phone: string | null;
+          employee_code: string | null;
+          is_active: boolean | null;
+          region_names: string | null;
+          county_names: string | null;
+          site_count: number | null;
+          technician_count: number | null;
+        };
+        Relationships: [];
+      };
+      technician_overview: {
+        Row: {
+          id: string | null;
+          full_name: string | null;
+          email: string | null;
+          phone: string | null;
+          employee_code: string | null;
+          is_active: boolean | null;
+          region_id: string | null;
+          region_name: string | null;
+          supervisor_id: string | null;
+          supervisor_name: string | null;
+          assigned_sites: number | null;
+          open_pm: number | null;
+          overdue_pm: number | null;
+        };
+        Relationships: [];
+      };
+    };
     Functions: {
+      admin_set_region_scopes: {
+        Args: {
+          p_user_id: string;
+          p_region_ids: string[];
+        };
+        Returns: undefined;
+      };
       admin_update_user: {
         Args: {
           p_user_id: string;
@@ -2623,6 +2700,14 @@ export type Database = {
       record_login: {
         Args: {
           p_client?: string;
+        };
+        Returns: undefined;
+      };
+      record_report_generated: {
+        Args: {
+          p_report: string;
+          p_filters?: Json;
+          p_row_count?: number;
         };
         Returns: undefined;
       };
@@ -2650,7 +2735,9 @@ export type Database = {
 };
 
 type PublicSchema = Database['public'];
-export type Tables<T extends keyof PublicSchema['Tables']> = PublicSchema['Tables'][T]['Row'];
+type PublicTablesAndViews = PublicSchema['Tables'] & PublicSchema['Views'];
+/** Row type of a table or view. */
+export type Tables<T extends keyof PublicTablesAndViews> = PublicTablesAndViews[T]['Row'];
 export type TablesInsert<T extends keyof PublicSchema['Tables']> = PublicSchema['Tables'][T]['Insert'];
 export type TablesUpdate<T extends keyof PublicSchema['Tables']> = PublicSchema['Tables'][T]['Update'];
 export type Enums<T extends keyof PublicSchema['Enums']> = PublicSchema['Enums'][T];

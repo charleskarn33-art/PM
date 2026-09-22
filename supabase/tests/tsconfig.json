@@ -2,7 +2,12 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["node"],
-    "noEmit": true
+    "lib": ["ES2022", "DOM"],
+    "noEmit": true,
+    // API tests import the web app's query modules (mirrors the vitest alias).
+    "paths": {
+      "@/*": ["../../apps/web/src/*"]
+    }
   },
   "include": ["src/**/*.ts", "vitest.config.ts"]
 }

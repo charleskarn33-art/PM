@@ -33,7 +33,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
-      - name: Database migrations, RLS and workflow tests
+      - name: Fetch PostgREST (API integration tests)
+        run: pnpm tools:postgrest
+      - name: Database migrations, RLS, workflow and API tests
         run: pnpm test:db
       - name: Generated database types are up to date
         run: pnpm db:types:check

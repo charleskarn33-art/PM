@@ -15,11 +15,11 @@ export function ProfileForm({ fullName, phone }: { fullName: string; phone: stri
       {state.message ? <Alert tone={state.status === 'saved' ? 'success' : 'danger'}>{state.message}</Alert> : null}
       <div className="space-y-2">
         <Label htmlFor="full_name">Full name</Label>
-        <Input id="full_name" name="full_name" defaultValue={fullName} required maxLength={120} />
+        <Input id="full_name" name="full_name" defaultValue={state.values?.full_name ?? fullName} required maxLength={120} />
       </div>
       <div className="space-y-2">
         <Label htmlFor="phone">Phone</Label>
-        <Input id="phone" name="phone" type="tel" defaultValue={phone ?? ''} placeholder="+231 …" />
+        <Input id="phone" name="phone" type="tel" defaultValue={state.values?.phone ?? phone ?? ''} placeholder="+231 …" />
       </div>
       <Button type="submit" disabled={pending}>
         {pending ? <Loader2 className="animate-spin" aria-hidden /> : null}

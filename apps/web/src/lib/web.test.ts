@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { derivePmKpis, monthPeriod } from './dashboard';
-import { readPublicEnv } from './env';
+import { assertNoPublicSecrets, readPublicEnv } from './env';
 import { breadcrumbsFor, navigationFor } from './navigation';
 import { isPublicPath, safeNextPath } from './routes';
 
@@ -29,6 +29,13 @@ describe('monthPeriod', () => {
   });
 });
 
+describe('assertNoPublicSecrets', () => {
+  it('rejects secrets exposed with the NEXT_PUBLIC_ prefix', () => {
+    expect(() => assertNoPublicSecrets({ NEXT_PUBLIC_SUPABASE_SECRET_KEY: 'x' })).toThrow(/NEXT_PUBLIC_SUPABASE_SECRET_KEY/);
+    expect(() => assertNoPublicSecrets({ SUPABASE_SECRET_KEY: 'x', NEXT_PUBLIC_SUPABASE_URL: 'u' })).not.toThrow();
+  });
+});
+
 describe('readPublicEnv', () => {
   const url = 'https://abc.supabase.co';
   it('accepts the publishable key or legacy anon key', () => {
@@ -52,6 +59,9 @@ describe('readPublicEnv', () => {
 describe('routes', () => {
   it('identifies public paths', () => {
     expect(isPublicPath('/login')).toBe(true);
+    expect(isPublicPath('/forgot-password')).toBe(true);
+    expect(isPublicPath('/auth/confirm')).toBe(true);
+    expect(isPublicPath('/auth/set-password')).toBe(false);
     expect(isPublicPath('/dashboard')).toBe(false);
   });
   it('only allows safe same-site redirects', () => {
@@ -75,6 +85,13 @@ describe('navigation', () => {
   });
   it('gives technicians a field-focused menu', () => {
     expect(labels('technician')).toEqual(['Dashboard', 'Sites', 'Failures', 'Corrective Actions', 'My Profile']);
+  });
+  it('opens Phase 2 organisation screens', () => {
+    expect(labels('super_admin')).toEqual(expect.arrayContaining(['Sites', 'Technicians', 'Supervisors', 'Users', 'Organization']));
+    expect(labels('regional_supervisor')).toContain('Technicians');
+    expect(labels('regional_supervisor')).not.toContain('Supervisors');
+    const sites = navigationFor('viewer').flatMap((s) => s.items).find((i) => i.label === 'Sites');
+    expect(sites?.plannedPhase).toBeUndefined();
   });
   it('builds breadcrumbs from navigation labels', () => {
     expect(breadcrumbsFor('/profile')).toEqual([

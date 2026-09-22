@@ -1,4 +1,7 @@
 import type { NextConfig } from 'next';
+import { assertNoPublicSecrets } from './src/lib/env';
+
+assertNoPublicSecrets(process.env);
 
 const securityHeaders = [
   { key: 'X-Frame-Options', value: 'DENY' },

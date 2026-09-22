@@ -12,7 +12,9 @@ import {
   MapPin,
   Settings,
   TriangleAlert,
+  UserCog,
   UserRound,
+  HardHat,
   Users,
   Wrench,
   type LucideIcon,
@@ -26,6 +28,8 @@ import { cn } from '@/lib/utils';
 const ICONS: Record<NavIcon, LucideIcon> = {
   dashboard: LayoutDashboard,
   sites: MapPin,
+  technicians: HardHat,
+  supervisors: UserCog,
   schedule: CalendarClock,
   visits: ClipboardCheck,
   failures: TriangleAlert,

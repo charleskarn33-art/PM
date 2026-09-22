@@ -1,6 +1,6 @@
 # IPT PowerTech PM System — Technical Implementation Plan
 
-Status: **Phase 1 complete** (see [Phase status](#phase-status)). Later phases are planned below and are not yet implemented.
+Status: **Phases 1–2 complete** (see [Phase status](#phase-status)). Later phases are planned below and are not yet implemented.
 
 ## 1. Goals
 
@@ -130,7 +130,7 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Monorepo, Supabase schema + migrations, roles, RLS, storage policies, auth (web + mobile), basic web dashboard, basic mobile app, tests, CI | **Done** |
-| 2 | Admin UI: regions, clusters, counties, sites, users (invite, role, scope), technicians, supervisors, assignments; demo users | Planned |
+| 2 | Admin UI: regions, clusters, counties, sites, users (invite, role, scope), technicians, supervisors, assignments | **Done** |
 | 3 | PM scheduling, PM template management UI, PM visit engine (completion %, failure count, submission rules), PM review | Planned |
 | 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | Planned |
 | 5 | Photos, GPS/geofence, offline SQLite store, outbox sync | Planned |
@@ -150,6 +150,23 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
 - Web: login (server action, error states), session refresh in `proxy.ts`, inactive-account page, role-aware sidebar (future modules shown disabled with their phase), breadcrumbs, dashboard KPIs from live RLS-scoped counts, profile page (edit name/phone), loading/error states, security headers.
 - Mobile: login, encrypted session persistence, role gate (Technician/Maintenance), bottom tabs Home / Sites / PM / Actions / Profile with live data, pull-to-refresh, empty/error states, configuration error screen.
 - Tests: 55 DB tests (schema, template, RLS per role, storage, workflow guards), 35 unit tests (shared, web, mobile), Android bundle export check.
+
+### Phase 2 — delivered
+
+- Database (migration `…0900_organization_management.sql`): active-technician check on site assignments (assignments ending in the past deactivate automatically), active-supervisor check on sites/technicians, audited `admin_set_region_scopes` and `record_report_generated` RPCs, audit triggers on regions/clusters/counties/technicians/supervisors, and `security_invoker` views `site_overview`, `technician_overview`, `supervisor_overview` (names, last/next PM, open failures/actions — always within the caller's RLS scope).
+- Web:
+  - **Sites**: search (site ID, name, county, cluster, region, technician, supervisor), filters (region, cluster, county, supervisor, PM status, site status), sortable columns, pagination (25/50/100), column visibility (kept in the URL), Excel-compatible CSV export of the current filter (audited as `REPORT_GENERATED`).
+  - **Site detail**: overview, location (map link, geofence radius incl. system default), power configuration, assigned technicians (assign / end assignment, inactive accounts flagged), upcoming PM, PM history, open failures, corrective actions. Create/edit site with cascading Region → Cluster → County.
+  - **Technicians** and **Supervisors** lists; **Admin → Organization** (regions/clusters/counties: create, edit, activate/deactivate); **Admin → Users** (search/filter, role/activation/home region, region scope, technician supervisor & employee code, supervisor employee code, invitations).
+  - Auth email flows: `/auth/confirm` (token-hash verification), set password, forgot password.
+- Mobile: site detail screen (location with native maps link, power configuration, next/last PM, open issues).
+- Tests: 78 DB/API tests (incl. 12 API integration tests through real PostgREST), 20 web, 20 shared, 13 mobile unit tests. End-to-end browser checks of all admin forms were run manually against PostgREST.
+
+### Known limitations after Phase 2
+
+- Invitations require `SUPABASE_SECRET_KEY` on the web server and the Auth email templates described in `docs/SETUP.md`; the auth email round-trip itself has not been exercised against a live Supabase Auth server.
+- Global search (sites, people, failures, corrective actions in one box) is planned with the Phase 6/7 screens that hold those records; the Sites list search covers site, county, technician and supervisor.
+- Supervisor PM-completion/overdue/failure metrics arrive with analytics (Phase 7).
 
 ### Known limitations after Phase 1
 

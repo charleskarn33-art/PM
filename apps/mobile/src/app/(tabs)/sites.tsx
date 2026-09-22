@@ -1,4 +1,5 @@
-import { FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { Link } from 'expo-router';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Banner, Card, EmptyState, LoadingView, StatusPill } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { useRemoteQuery } from '@/lib/use-remote-query';
@@ -29,7 +30,10 @@ export default function SitesScreen() {
       ListHeaderComponent={query.error ? <Banner tone="danger" message={query.error} /> : null}
       ListEmptyComponent={
         query.error ? null : (
-          <EmptyState title="No assigned sites" message="Your supervisor has not assigned any sites to you yet." />
+          <EmptyState
+            title="No assigned sites"
+            message="Your supervisor has not assigned any sites to you yet."
+          />
         )
       }
       renderItem={({ item }) => <SiteCard site={item} />}
@@ -45,20 +49,31 @@ function SiteCard({ site }: { site: SiteRow }) {
     site.grid_available && 'Grid',
   ].filter(Boolean);
   return (
-    <Card>
-      <View style={styles.row}>
-        <Text style={styles.code}>{site.site_code}</Text>
-        <View style={styles.pills}>
-          {site.is_demo ? <StatusPill status="DEMO" tone="neutral" /> : null}
-          <StatusPill status={site.status} tone={site.status === 'ACTIVE' ? 'success' : 'neutral'} />
-        </View>
-      </View>
-      <Text style={styles.name}>{site.site_name}</Text>
-      <Text style={styles.meta}>
-        {[site.regions?.name, site.counties?.name].filter(Boolean).join(' · ') || 'Location not set'}
-      </Text>
-      <Text style={styles.meta}>Power: {power.length ? power.join(', ') : 'Not recorded'}</Text>
-    </Card>
+    <Link href={{ pathname: '/site/[id]', params: { id: site.id } }} asChild>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Open site ${site.site_code} ${site.site_name}`}
+      >
+        <Card>
+          <View style={styles.row}>
+            <Text style={styles.code}>{site.site_code}</Text>
+            <View style={styles.pills}>
+              {site.is_demo ? <StatusPill status="DEMO" tone="neutral" /> : null}
+              <StatusPill
+                status={site.status}
+                tone={site.status === 'ACTIVE' ? 'success' : 'neutral'}
+              />
+            </View>
+          </View>
+          <Text style={styles.name}>{site.site_name}</Text>
+          <Text style={styles.meta}>
+            {[site.regions?.name, site.counties?.name].filter(Boolean).join(' · ') ||
+              'Location not set'}
+          </Text>
+          <Text style={styles.meta}>Power: {power.length ? power.join(', ') : 'Not recorded'}</Text>
+        </Card>
+      </Pressable>
+    </Link>
   );
 }
 

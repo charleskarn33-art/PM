@@ -17,7 +17,8 @@
     "dev:mobile": "pnpm --filter @ipt/mobile start",
     "format": "prettier --write .",
     "db:types": "node scripts/gen-db-types.mjs",
-    "db:types:check": "node scripts/gen-db-types.mjs --check"
+    "db:types:check": "node scripts/gen-db-types.mjs --check",
+    "tools:postgrest": "./scripts/fetch-postgrest.sh"
   },
   "devDependencies": {
     "prettier": "^3.6.2",

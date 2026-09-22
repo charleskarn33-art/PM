@@ -1,6 +1,6 @@
 import 'server-only';
-import type { AppRole, Tables } from '@ipt/shared';
-import { redirect } from 'next/navigation';
+import { can, type AppRole, type Capability, type Tables } from '@ipt/shared';
+import { notFound, redirect } from 'next/navigation';
 import { cache } from 'react';
 import { createClient } from '@/lib/supabase/server';
 
@@ -41,3 +41,20 @@ export const requireSession = cache(async (): Promise<SessionContext> => {
     regionNames: (scopes ?? []).flatMap((s) => (s.regions ? [s.regions.name] : [])),
   };
 });
+
+/**
+ * Page-level guard for role-specific screens. The database still enforces
+ * access (RLS); this only avoids rendering screens a role cannot use.
+ * Responds 404 so restricted areas are not advertised.
+ */
+export async function requireCapability(capability: Capability): Promise<SessionContext> {
+  const session = await requireSession();
+  if (!can(session.role, capability)) notFound();
+  return session;
+}
+
+export async function requireRole(roles: readonly AppRole[]): Promise<SessionContext> {
+  const session = await requireSession();
+  if (!roles.includes(session.role)) notFound();
+  return session;
+}

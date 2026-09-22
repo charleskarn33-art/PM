@@ -35,3 +35,4 @@ supabase/.temp/
 coverage/
 dist/
 *.log
+.tools/

@@ -1,11 +1,12 @@
 import pg from 'pg';
 import { ADMIN_URL, TEST_DB_NAME, ids, readSql, schemaSqlFiles, testDbUrl } from './db';
+import { startPostgrest } from './postgrest';
 
 /**
  * Builds a fresh test database: Supabase shim + all migrations + seed, then
  * role fixtures. Fails loudly if any migration errors.
  */
-export default async function setup(): Promise<void> {
+export default async function setup(): Promise<() => void> {
   const admin = new pg.Client({ connectionString: ADMIN_URL });
   await admin.connect();
   await admin.query(`drop database if exists ${TEST_DB_NAME} with (force)`);
@@ -26,6 +27,14 @@ export default async function setup(): Promise<void> {
   } finally {
     await db.end();
   }
+
+  // API integration tests run through a real PostgREST when the binary is
+  // available (pnpm tools:postgrest); otherwise they are skipped with a notice.
+  const pgrst = await startPostgrest(ADMIN_URL);
+  if (!pgrst) console.warn('PostgREST binary not found: API integration tests will be skipped (run pnpm tools:postgrest).');
+  return () => {
+    pgrst?.kill();
+  };
 }
 
 function fixturesSql(): string {
@@ -38,7 +47,7 @@ function fixturesSql(): string {
     [ids.techA, 'tech.a@test.local', 'technician', true, ids.regionA],
     [ids.techB, 'tech.b@test.local', 'technician', true, ids.regionB],
     [ids.maintenance, 'maintenance@test.local', 'maintenance', true, null],
-    [ids.inactiveTech, 'inactive@test.local', 'technician', false, ids.regionA],
+    [ids.inactiveTech, 'inactive@test.local', 'technician', true, ids.regionA],
   ];
 
   const userSql = users
@@ -82,5 +91,8 @@ function fixturesSql(): string {
       ('${ids.siteA1}', '${ids.techA}'),
       ('${ids.siteB1}', '${ids.techB}'),
       ('${ids.siteA1}', '${ids.inactiveTech}');
+
+    -- Deactivated after being assigned (assignments require an active technician).
+    update public.profiles set is_active = false where id = '${ids.inactiveTech}';
   `;
 }

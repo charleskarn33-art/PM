@@ -3,6 +3,8 @@ import { can, type AppRole, type Capability } from '@ipt/shared';
 export type NavIcon =
   | 'dashboard'
   | 'sites'
+  | 'technicians'
+  | 'supervisors'
   | 'schedule'
   | 'visits'
   | 'failures'
@@ -40,7 +42,9 @@ export const NAVIGATION: NavSection[] = [
     title: 'Operations',
     items: [
       { label: 'Dashboard', href: '/dashboard', icon: 'dashboard' },
-      { label: 'Sites', href: '/sites', icon: 'sites', plannedPhase: 2 },
+      { label: 'Sites', href: '/sites', icon: 'sites' },
+      { label: 'Technicians', href: '/technicians', icon: 'technicians', roles: READ_ROLES },
+      { label: 'Supervisors', href: '/supervisors', icon: 'supervisors', roles: ['super_admin', 'regional_manager', 'viewer'] },
       { label: 'PM Schedule', href: '/schedule', icon: 'schedule', roles: READ_ROLES, plannedPhase: 3 },
       { label: 'PM Visits & Review', href: '/visits', icon: 'visits', roles: READ_ROLES, plannedPhase: 3 },
       { label: 'Failures', href: '/failures', icon: 'failures', plannedPhase: 6 },
@@ -57,13 +61,12 @@ export const NAVIGATION: NavSection[] = [
   {
     title: 'Administration',
     items: [
-      { label: 'Users', href: '/admin/users', icon: 'users', capability: 'manage_users', plannedPhase: 2 },
+      { label: 'Users', href: '/admin/users', icon: 'users', capability: 'manage_users' },
       {
         label: 'Organization',
         href: '/admin/organization',
         icon: 'organization',
         capability: 'manage_organization',
-        plannedPhase: 2,
       },
       { label: 'PM Templates', href: '/admin/templates', icon: 'templates', capability: 'manage_templates', plannedPhase: 3 },
       { label: 'Settings', href: '/admin/settings', icon: 'settings', capability: 'manage_settings', plannedPhase: 5 },
