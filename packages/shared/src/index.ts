@@ -6,3 +6,7 @@ export * from './domain/schedule';
 export * from './domain/csv';
 export * from './validation/common';
 export * from './validation/organization';
+export * from './pm/checklist';
+export * from './pm/recurrence';
+export * from './validation/template';
+export * from './validation/schedule';

@@ -131,7 +131,22 @@ export async function itemId(client: Client, code: string): Promise<string> {
   return rows[0].id;
 }
 
-/** Create a PM visit as the given technician (must be assigned to the site). */
+/**
+ * Removes every completeness/evidence requirement from the active template
+ * (inside the test transaction). For tests about the review workflow that
+ * need a SUBMITTED visit without filling in all 69 items.
+ */
+export async function relaxRequirements(client: Client): Promise<void> {
+  await actAs(client, null);
+  await client.query(`update public.pm_checklist_items set is_required = false, requires_photo_on_failure = false,
+      requires_comment_on_failure = false, requires_photo_on_answer = '{}', requires_comment_on_answer = '{}'`);
+  await client.query(`update public.pm_reading_fields set is_required = false`);
+}
+
+/**
+ * Create a PM visit as the given technician (must be assigned to the site).
+ * A SUBMITTED visit is created with requirements relaxed (see relaxRequirements).
+ */
 export async function createVisitAs(
   client: Client,
   technicianId: string,
@@ -139,6 +154,7 @@ export async function createVisitAs(
   status: 'IN_PROGRESS' | 'COMPLETED' | 'SUBMITTED' = 'IN_PROGRESS',
 ): Promise<string> {
   const templateId = await activeTemplateId(client);
+  if (status === 'SUBMITTED') await relaxRequirements(client);
   await actAs(client, technicianId);
   const { rows } = await client.query<{ id: string }>(
     `insert into public.pm_visits (site_id, template_id, technician_id, status, started_at,

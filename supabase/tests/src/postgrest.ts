@@ -65,7 +65,7 @@ export async function startPostgrest(adminUrl: string): Promise<ChildProcess | n
       PGRST_JWT_SECRET: JWT_SECRET,
       PGRST_SERVER_PORT: String(PGRST_PORT),
       PGRST_DB_MAX_ROWS: '1000',
-      PGRST_LOG_LEVEL: 'error',
+      PGRST_LOG_LEVEL: 'crit',
       // Lets tests send `Prefer: tx=rollback` so API calls never persist.
       PGRST_DB_TX_END: 'commit-allow-override',
     },

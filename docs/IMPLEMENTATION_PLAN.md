@@ -1,6 +1,6 @@
 # IPT PowerTech PM System — Technical Implementation Plan
 
-Status: **Phases 1–2 complete** (see [Phase status](#phase-status)). Later phases are planned below and are not yet implemented.
+Status: **Phases 1–3 complete** (see [Phase status](#phase-status)). Later phases are planned below and are not yet implemented.
 
 ## 1. Goals
 
@@ -131,7 +131,7 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
 |---|---|---|
 | 1 | Monorepo, Supabase schema + migrations, roles, RLS, storage policies, auth (web + mobile), basic web dashboard, basic mobile app, tests, CI | **Done** |
 | 2 | Admin UI: regions, clusters, counties, sites, users (invite, role, scope), technicians, supervisors, assignments | **Done** |
-| 3 | PM scheduling, PM template management UI, PM visit engine (completion %, failure count, submission rules), PM review | Planned |
+| 3 | PM scheduling, PM template management UI, PM visit engine (completion %, failure count, submission rules), PM review | **Done** |
 | 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | Planned |
 | 5 | Photos, GPS/geofence, offline SQLite store, outbox sync | Planned |
 | 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | Planned |
@@ -160,7 +160,29 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
   - **Technicians** and **Supervisors** lists; **Admin → Organization** (regions/clusters/counties: create, edit, activate/deactivate); **Admin → Users** (search/filter, role/activation/home region, region scope, technician supervisor & employee code, supervisor employee code, invitations).
   - Auth email flows: `/auth/confirm` (token-hash verification), set password, forgot password.
 - Mobile: site detail screen (location with native maps link, power configuration, next/last PM, open issues).
-- Tests: 78 DB/API tests (incl. 12 API integration tests through real PostgREST), 20 web, 20 shared, 13 mobile unit tests. End-to-end browser checks of all admin forms were run manually against PostgREST.
+- Tests (at Phase 2): 78 DB/API tests (incl. 12 API integration tests through real PostgREST), 20 web, 20 shared, 13 mobile unit tests. End-to-end browser checks of all admin forms were run manually against PostgREST.
+
+### Phase 3 — delivered
+
+- Database (migration `…1000_pm_engine.sql`):
+  - Write-time validation of answers and readings: configured min/max, whole numbers, allowed options, value type (a numeric question cannot take YES/NO).
+  - **Server-computed** `completion_pct` (required items + required readings in sections not marked N/A) and `failure_count`; clients cannot write them.
+  - Section N/A only where the section allows it.
+  - **Submission rules**: required answers, comment on failure / on configured answers (e.g. battery water top-up = YES), photo on failure / on configured answers (e.g. fire extinguisher = YES). Error text: "Unable to submit because N required fields are incomplete."; `pm_visit_issues(visit_id)` lists them. Photo enforcement is a system setting (`pm_submission.enforce_photo_requirements`, default on) because photo capture ships in Phase 5.
+  - Visit ↔ schedule linkage (same site/technician, one live visit per schedule) and automatic schedule status (IN_PROGRESS → SUBMITTED → APPROVED/REJECTED; cancelled visit reopens the schedule, OVERDUE if past due).
+  - Schedules only for active technicians assigned to the site and the ACTIVE template; `mark_overdue_schedules()` (scheduled daily via pg_cron where available).
+  - **Template versioning**: `admin_clone_template` (new DRAFT version), `admin_activate_template` (retires the previous version, moves open schedules; visits keep their version). Retired versions are read-only; drafts cannot be used for PM.
+  - Views `pm_schedule_overview`, `pm_visit_overview` (RLS via security_invoker).
+- Shared: TypeScript mirror of the checklist rules (`visitProgress`, `visitIssues`, `numberError`), recurrence dates (month-end safe), template/schedule validation. A database test proves the shared rules produce exactly the database's completion %, failure count and issue list.
+- Web: **PM Schedule** (list with status/overdue/region/date filters; create one-off or recurring schedules; reschedule, reassign, cancel), **PM Visits & Review** (review queue, full checklist view with readings, answers, failures, comments, evidence counts, outstanding issues; approve / reject with required reason), **PM Templates** (versions, clone/activate, sections, readings and questions with every rule configurable, reordering, deactivation).
+- Mobile: PM tab (start from schedule with a device-generated visit id, continue, fix & resubmit), visit screen (progress bar, per-section progress, section N/A), section screen (large YES/NO/N/A buttons, numeric keypad with units and range checks, choice chips, text, dates, comments, failure and evidence notices, per-answer save status with retry), submit screen (issues by section, overall comments).
+
+### Known limitations after Phase 3
+
+- The mobile app still needs a connection: answers save immediately and failed saves are kept on screen with **Retry**, but they are not stored on the device across app restarts (Phase 5 SQLite outbox).
+- Photo capture is Phase 5; with photo enforcement on, items that need a photo block submission until then (an administrator can switch enforcement off meanwhile).
+- Failure records and corrective actions are not yet created from submitted PM (Phase 6); `failure_count` and the per-answer failure flag are already server-computed.
+- The mobile screens were checked by type-checking, lint, unit tests, the Android bundle build and the API tests of the calls they make; they have not been run on a device or emulator in this environment.
 
 ### Known limitations after Phase 2
 

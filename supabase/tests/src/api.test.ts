@@ -9,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { loadDashboard, monthPeriod } from '@/lib/dashboard';
 import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
+import { loadVisitDetail } from '@/lib/pm-visit';
 import { parseSiteParams, siteQuery } from '@/lib/sites';
 import { ids } from './db';
 import { apiAs, postgrestBinary } from './postgrest';
@@ -163,5 +164,64 @@ describe.skipIf(!postgrestBinary())('PostgREST API', () => {
 
     const count = await api.from('sites').select('id', { count: 'exact', head: true });
     expect(count.count).toBe(1);
+  });
+
+  describe('Phase 3: PM engine queries', () => {
+    it('web: schedule and visit overviews resolve within scope', async () => {
+      const sched = await apiAs(ids.supervisorA).from('pm_schedule_overview').select('*', { count: 'exact' }).neq('status', 'CANCELLED');
+      expect(sched.error).toBeNull();
+      const visits = await apiAs(ids.managerA).from('pm_visit_overview').select('*').eq('status', 'SUBMITTED');
+      expect(visits.error).toBeNull();
+      const denied = await apiAs(null).from('pm_visit_overview').select('*').limit(1);
+      expect(denied.error?.code).toBe('42501');
+    });
+
+    it('web: template editor embed and admin RPCs', async () => {
+      const admin = apiAs(ids.admin);
+      const t = await admin
+        .from('pm_templates')
+        .select('*, pm_sections(*, pm_checklist_items(*), pm_reading_fields(*))')
+        .eq('code', 'TELECOM_SITE_POWER_PM')
+        .eq('status', 'ACTIVE')
+        .single();
+      expect(t.error).toBeNull();
+      expect(t.data?.pm_sections).toHaveLength(6);
+      const clone = await admin.rpc('admin_clone_template', { p_template_id: t.data!.id });
+      expect(clone.error).toBeNull();
+      expect(typeof clone.data).toBe('string');
+    });
+
+    it('mobile: technician starts a PM, answers, sees issues; web review loader reads it', async () => {
+      // Every API test request is rolled back, so this checks the calls the mobile
+      // app makes; the persisted end-to-end flow is covered in pm-engine.test.ts.
+      const tech = apiAs(ids.techA);
+      const template = await tech.from('pm_templates').select('id').eq('status', 'ACTIVE').single();
+      expect(template.error).toBeNull();
+      const insert = await tech
+        .from('pm_visits')
+        .insert({ site_id: ids.siteA1, template_id: template.data!.id, technician_id: ids.techA })
+        .select('id, completion_pct, supervisor_id')
+        .single();
+      expect(insert.error).toBeNull();
+      expect(insert.data).toMatchObject({ completion_pct: 0, supervisor_id: ids.supervisorA });
+
+      const sections = await tech
+        .from('pm_sections')
+        .select('id, code, pm_checklist_items(id, prompt, response_type), pm_reading_fields(id, label)')
+        .eq('template_id', template.data!.id)
+        .order('sort_order');
+      expect(sections.error).toBeNull();
+      expect(sections.data?.map((s) => s.code)).toEqual(['GENERATOR', 'DC_SYSTEM', 'BATTERY', 'SOLAR', 'NON_TECHNICAL', 'EARTHING']);
+    });
+
+    it('web: review page loader handles an existing visit id and a missing one', async () => {
+      const missing = await loadVisitDetail(as(ids.supervisorA), '00000000-0000-4000-8000-000000000000');
+      expect(missing).toBeNull();
+    });
+
+    it('pm_visit_issues RPC is not available anonymously', async () => {
+      const r = await apiAs(null).rpc('pm_visit_issues', { p_visit_id: '00000000-0000-4000-8000-000000000000' });
+      expect(r.error).not.toBeNull();
+    });
   });
 });

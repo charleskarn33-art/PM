@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { actAs, activeTemplateId, createVisitAs, getPool, ids, inTx, itemId, tryQuery } from './db';
+import { actAs, activeTemplateId, createVisitAs, getPool, ids, inTx, itemId, relaxRequirements, tryQuery } from './db';
 
 afterAll(async () => {
   await getPool().end();
@@ -138,6 +138,7 @@ describe('checklist responses', () => {
 
   it('locks responses after submission and reopens them after rejection', async () => {
     await inTx(async (c) => {
+      await relaxRequirements(c);
       const visitId = await createVisitAs(c, ids.techA, ids.siteA1);
       const item = await itemId(c, 'gen_radiator');
       await c.query(upsertResponse, [visitId, item, 'YES']);

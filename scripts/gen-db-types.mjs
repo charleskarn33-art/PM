@@ -84,6 +84,8 @@ export async function generate(connectionString) {
                coalesce(p.proargnames, array[]::text[])::text[] as arg_names,
                array(select format_type(t, null) from unnest(p.proargtypes) t) as arg_types,
                p.pronargdefaults as n_defaults,
+               coalesce(p.proargmodes::text[], array[]::text[]) as arg_modes,
+               array(select format_type(t, null) from unnest(coalesce(p.proallargtypes, p.proargtypes::oid[])) t) as all_arg_types,
                format_type(p.prorettype, null) as return_type,
                p.proretset as returns_set,
                rt.typname as return_typname, rt.typtype as return_typtype
@@ -208,18 +210,28 @@ function render({ enums, enumNames, columns, fks, functions, tableNames }) {
     out.push(`${ind(2)}Functions: {`);
     for (const f of functions) {
       out.push(`${ind(3)}${f.name}: {`);
+      // proargnames covers all arguments (incl. RETURNS TABLE columns, mode 't');
+      // proargtypes covers input arguments only.
+      const allNames = f.arg_names;
+      const inputNames = f.arg_modes.length > 0
+        ? f.arg_modes.flatMap((m, i) => (['i', 'b', 'v'].includes(m) ? [allNames[i]] : []))
+        : allNames;
       const firstDefault = f.arg_types.length - f.n_defaults;
       if (f.arg_types.length === 0) out.push(`${ind(4)}Args: never;`);
       else {
         out.push(`${ind(4)}Args: {`);
         f.arg_types.forEach((t, i) => {
           const opt = i >= firstDefault ? '?' : '';
-          out.push(`${ind(5)}${f.arg_names[i]}${opt}: ${formatTypeToTs(t, enumNames)};`);
+          out.push(`${ind(5)}${inputNames[i]}${opt}: ${formatTypeToTs(t, enumNames)};`);
         });
         out.push(`${ind(4)}};`);
       }
       let ret;
-      if (f.return_typtype === 'c' && tableNames.has(f.return_typname)) {
+      const tableCols = f.arg_modes.flatMap((mode, i) => (mode === 't' ? [i] : []));
+      if (tableCols.length > 0) {
+        // RETURNS TABLE (...): one object per row.
+        ret = `{ ${tableCols.map((i) => `${allNames[i]}: ${formatTypeToTs(f.all_arg_types[i], enumNames)}`).join('; ')} }`;
+      } else if (f.return_typtype === 'c' && tableNames.has(f.return_typname)) {
         ret = `Database['public']['Tables']['${f.return_typname}']['Row']`;
       } else ret = formatTypeToTs(f.return_type, enumNames);
       out.push(`${ind(4)}Returns: ${ret}${f.returns_set ? '[]' : ''};`);

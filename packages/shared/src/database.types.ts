@@ -2610,6 +2610,66 @@ export type Database = {
       };
     };
     Views: {
+      pm_schedule_overview: {
+        Row: {
+          id: string | null;
+          site_id: string | null;
+          site_code: string | null;
+          site_name: string | null;
+          region_id: string | null;
+          county_id: string | null;
+          is_demo: boolean | null;
+          template_id: string | null;
+          template_name: string | null;
+          template_version: number | null;
+          technician_id: string | null;
+          technician_name: string | null;
+          supervisor_id: string | null;
+          supervisor_name: string | null;
+          frequency: Database['public']['Enums']['pm_frequency'] | null;
+          scheduled_date: string | null;
+          due_date: string | null;
+          status: Database['public']['Enums']['pm_status'] | null;
+          is_overdue: boolean | null;
+          priority: Database['public']['Enums']['priority_level'] | null;
+          notes: string | null;
+          visit_id: string | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Relationships: [];
+      };
+      pm_visit_overview: {
+        Row: {
+          id: string | null;
+          schedule_id: string | null;
+          site_id: string | null;
+          site_code: string | null;
+          site_name: string | null;
+          region_id: string | null;
+          county_id: string | null;
+          template_id: string | null;
+          template_version: number | null;
+          technician_id: string | null;
+          technician_name: string | null;
+          supervisor_id: string | null;
+          supervisor_name: string | null;
+          status: Database['public']['Enums']['pm_status'] | null;
+          started_at: string | null;
+          ended_at: string | null;
+          submitted_at: string | null;
+          reviewed_at: string | null;
+          reviewed_by_name: string | null;
+          review_comments: string | null;
+          completion_pct: number | null;
+          failure_count: number | null;
+          gps_status: Database['public']['Enums']['gps_status'] | null;
+          is_demo: boolean | null;
+          created_at: string | null;
+          updated_at: string | null;
+        };
+        Relationships: [];
+      };
       site_overview: {
         Row: {
           id: string | null;
@@ -2681,6 +2741,18 @@ export type Database = {
       };
     };
     Functions: {
+      admin_activate_template: {
+        Args: {
+          p_template_id: string;
+        };
+        Returns: undefined;
+      };
+      admin_clone_template: {
+        Args: {
+          p_template_id: string;
+        };
+        Returns: string;
+      };
       admin_set_region_scopes: {
         Args: {
           p_user_id: string;
@@ -2696,6 +2768,16 @@ export type Database = {
           p_region_id?: string;
         };
         Returns: Database['public']['Tables']['profiles']['Row'];
+      };
+      mark_overdue_schedules: {
+        Args: never;
+        Returns: number;
+      };
+      pm_visit_issues: {
+        Args: {
+          p_visit_id: string;
+        };
+        Returns: { section_code: string; ref_type: string; ref_id: string; label: string; issue: string }[];
       };
       record_login: {
         Args: {

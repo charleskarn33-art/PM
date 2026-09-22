@@ -55,6 +55,14 @@ The web app verifies email links server-side at `/auth/confirm`. In **Authentica
 | Invite user | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/auth/set-password` |
 | Reset password | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/auth/set-password` |
 
+### Scheduled job
+
+Enable the **pg_cron** extension (Database → Extensions) before running the migrations, and the migration schedules `mark_overdue_schedules()` daily at 00:15 UTC. If pg_cron is enabled later, run:
+
+```sql
+select cron.schedule('ipt-mark-overdue-pm', '15 0 * * *', 'select public.mark_overdue_schedules()');
+```
+
 Set **Authentication → URL configuration → Site URL** to the portal URL, and `SITE_URL` in the web app environment to the same value.
 
 ## 2. Web app (`apps/web`)
