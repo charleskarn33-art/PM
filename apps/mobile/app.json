@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "IPT PowerTech PM",
+    "slug": "ipt-powertech-pm",
+    "scheme": "iptpm",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#0b1f3a",
+    "ios": {
+      "bundleIdentifier": "com.iptpowertech.pm",
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "com.iptpowertech.pm",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": ["expo-router", "expo-secure-store", "expo-sqlite"],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

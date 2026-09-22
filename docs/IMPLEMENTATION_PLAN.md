@@ -1,0 +1,161 @@
+# IPT PowerTech PM System — Technical Implementation Plan
+
+Status: **Phase 1 complete** (see [Phase status](#phase-status)). Later phases are planned below and are not yet implemented.
+
+## 1. Goals
+
+Replace the manual, PDF-based preventive maintenance (PM) workflow for telecom site power with:
+
+- a **technician mobile app** (Expo / React Native) that works **offline-first**,
+- a **web portal** (Next.js) for supervisors, managers, administrators and viewers,
+- a **Supabase backend** (PostgreSQL + Auth + Storage) where **Row Level Security (RLS) is the security boundary**.
+
+The **Tienii (1301) Preventative Maintenance Report, 2026-09-15** is the reference for PM terminology and checklist structure: six sections (Generator, DC System, Battery, Solar, Non-Technical Observations, Earthing / Grounding), readings, YES/NO/N/A items, photos, comments, GPS, failure count and completion.
+
+## 2. Repository layout
+
+```
+apps/
+  web/                 Next.js 16 (App Router, Tailwind v4, shadcn/ui-style components)
+  mobile/              Expo SDK 57 (Expo Router, SecureStore, SQLite)
+packages/
+  shared/              @ipt/shared — generated DB types + shared domain logic (roles, status tones, DC kW, ...)
+supabase/
+  migrations/          Ordered SQL migrations (schema, RLS, storage, reference template)
+  seed.sql             DEMO data for local development only (is_demo = true)
+  tests/               @ipt/db-tests — migration + RLS + workflow tests on real PostgreSQL
+scripts/
+  gen-db-types.mjs     Generates packages/shared/src/database.types.ts from the migrated schema
+docs/
+```
+
+pnpm workspaces (hoisted linker for Metro compatibility). React is pinned to 19.2.3 across the repo (the version Expo SDK 57 requires; Next 16 supports it).
+
+## 3. Architecture
+
+```
+ Mobile (Expo)  ── supabase-js (publishable key, user JWT) ──┐
+   SQLite (offline store, Phase 5)                           │      Supabase
+   SecureStore (session key)                                 ├──▶  PostgREST ──▶ PostgreSQL (RLS + triggers)
+ Web (Next.js on Vercel)                                     │      Auth (GoTrue)
+   Server Components / Server Actions (user JWT via cookies) ┘      Storage (private buckets, RLS on objects)
+```
+
+- **Clients only ever hold the publishable (anon) key** plus the user's JWT. Both apps refuse to start with a secret/service-role key (`readPublicEnv`, `readMobileEnv`).
+- **Authorization lives in the database**: RLS policies decide *who* can touch a row; `BEFORE` guard triggers decide *what* they may change (workflow transitions, immutable fields). UI capability checks (`can(role, capability)`) only shape the interface.
+- Business rules that must not be spoofed are evaluated server-side: failure detection (`pm_responses.is_failure`), prompt snapshots, visit reviewer, timestamps, audit entries.
+
+## 4. Data model
+
+All tables have UUID primary keys (client-generatable for offline records), `created_at/updated_at` and, where mutable, `created_by/updated_by` maintained by trigger (`private.set_audit_columns`).
+
+| Area | Tables |
+|---|---|
+| Identity | `profiles` (1:1 `auth.users`), `roles`, `user_region_scopes`, `technicians`, `supervisors` |
+| Organisation | `regions` → `clusters` → `counties` → `sites`; `site_assignments` |
+| PM template (data-driven) | `pm_templates` (versioned) → `pm_sections` → `pm_reading_fields`, `pm_checklist_items` |
+| PM execution | `pm_schedules`, `pm_visits`, `pm_responses`, `pm_readings`, `pm_photos` |
+| Section analytics | `generator_readings`, `dc_readings` (+ generated `dc_power_kw`), `dc_phase_currents`, `battery_readings`, `solar_readings`, `earthing_readings` |
+| Issues | `failures`, `corrective_actions`, `corrective_action_updates` |
+| Support | `notifications`, `audit_logs`, `site_documents`, `equipment`, `equipment_history`, `system_settings` |
+
+Key design decisions:
+
+- **Checklist is data, not code.** Each `pm_checklist_items` row carries `response_type` (YES_NO_NA, NUMBER, TEXT, SELECT, MULTI_SELECT, PHOTO, DATE, DATETIME), `is_required`, `allow_not_applicable`, `unit`, `min_value/max_value`, `creates_failure_on_no/yes`, `failure_severity`, `requires_photo_on_failure`, `requires_comment_on_failure`, conditional evidence (`requires_photo_on_answer`, `requires_comment_on_answer`, `photo_instructions`), `metadata` (e.g. `{"phase_number": 3}`) and `analytics_key`.
+- **History is never destroyed.** Items/sections/fields are deactivated (`is_active`, `deactivated_at`), FKs are `on delete restrict`, and every response stores `prompt_snapshot`/`unit_snapshot`. Templates are versioned (`code` + `version`, one ACTIVE per code).
+- **Measurements are never overwritten.** Raw values live in `pm_readings`/`pm_responses`; calculated values are separate columns (`dc_readings.dc_power_kw` is a stored generated column = V × A / 1000).
+- **Clamp-meter phases** are `NUMBER` items (unit `A`, `metadata.phase_number` 1–7) projected into `dc_phase_currents (phase_number, amp_value, unit, photo_id, comment)`.
+- **Site hierarchy consistency**: `sites.region_id/cluster_id` are derived from `county_id` by trigger.
+- **Duplicate-safe failures**: unique `(visit_id, checklist_item_id)` for checklist failures; repeated syncs cannot create duplicates.
+- **No invented engineering limits.** Only definitional bounds are seeded (percent 0–100, counts ≥ 0). DC high-load thresholds live in `system_settings.dc_thresholds` and are `null` (disabled) until an administrator sets them.
+- **Demo data is flagged** (`sites.is_demo`, `pm_visits.is_demo`) and shown with a banner/badge.
+
+### Reference template (migration `…0800_reference_pm_template.sql`)
+
+6 sections, 16 reading fields, 69 checklist items, text taken verbatim from the reference report. Failure rules are seeded from question polarity (e.g. *"Is The Machine burning Oil?"* YES → failure, *"Is Automation Working?"* NO → failure). Task/inspection confirmations (e.g. *"Fuel Filter Change"*) do not create failures. All seeded severities are MEDIUM. **These rules and severities must be confirmed by IPT PowerTech** and can be changed by a Super Admin without a code change.
+
+## 5. Security model (RLS)
+
+| Role | Read | Write |
+|---|---|---|
+| Super Admin | everything | everything (role changes only via `admin_update_user` RPC, audited) |
+| Viewer | everything except audit log (read-only) | own contact details |
+| Regional Manager | sites/people/PM/failures/actions in `user_region_scopes` regions | own contact details |
+| Regional Supervisor | as manager | assignments, schedules, PM review (approve/reject), failures, corrective actions — in scope |
+| Technician | actively assigned sites, own schedules/visits/responses/photos, own failures/actions | create/update own visits until submitted (or after rejection); manual failures and on-site corrective actions on assigned sites |
+| Maintenance | assigned corrective actions and their sites | progress assigned actions up to COMPLETED |
+| Inactive / new user | nothing | nothing |
+
+Mechanics:
+
+- Helpers are `SECURITY DEFINER` functions in schema `private` (not exposed by the Data API): `current_app_role`, `has_any_role`, `scoped_region_ids`, `scoped_site_ids`, `technician_site_ids`, `accessible_site_ids`, `can_manage_site`, `can_read_visit`, `can_edit_visit`, …
+- Policies wrap helpers in `(select …)` so they are evaluated once per statement (scales to thousands of sites).
+- `anon` has **no** privileges on any public table. Column-level grants restrict `profiles` (self-edit of name/phone/avatar only) and `notifications` (`read_at` only). Analytics tables and `audit_logs` are system-written only.
+- Guard triggers: `guard_pm_visit` (technicians cannot approve, change site/technician/reviewer, or edit after submission; supervisors may only change review fields; rejection requires a reason), `guard_corrective_action` (OPEN → ASSIGNED → IN_PROGRESS → COMPLETED → VERIFIED → CLOSED; assignees cannot verify/close or reassign; completion requires a resolution; every transition is written to `corrective_action_updates`).
+- Storage: private buckets `pm-photos` and `site-documents`, object path starts with `<site_id>/`; object policies follow site access. Photo evidence can only be deleted by a Super Admin.
+- New sign-ups get an **inactive** profile; public sign-up is disabled in `supabase/config.toml`; the first admin is bootstrapped with `private.bootstrap_super_admin(email)` from the SQL editor.
+
+## 6. Offline-first architecture (design; implemented in Phase 5)
+
+The mobile app will treat the local SQLite database as the **source of truth for the technician's in-progress work** and Supabase as the system of record.
+
+**Local store (Expo SQLite)** — mirrors the server shapes with extra sync columns:
+
+| Local table | Purpose |
+|---|---|
+| `sites`, `site_assignments`, `pm_schedules` | Downloaded for the technician's scope |
+| `pm_templates`, `pm_sections`, `pm_reading_fields`, `pm_checklist_items` | Active template version (keyed by template id + version) |
+| `pm_visits`, `pm_responses`, `pm_readings` | Work captured on the device |
+| `photos` | Local file URI, compressed/thumbnail URIs, metadata, upload state |
+| `failures`, `corrective_actions` | Created on site |
+| `outbox` | Ordered mutation queue: `(id, entity, entity_id, op, payload, attempts, last_error, created_at)` |
+| `sync_meta` | Per-table high-water marks (`updated_at`) for incremental pull |
+
+Every locally-created row gets a UUID generated on the device, and a `sync_state`: `LOCAL → PENDING_SYNC → SYNCING → SYNCED | SYNC_ERROR`.
+
+**Push** (outbox, FIFO, parents before children): upserts with `on conflict (id)` for visits and `on conflict (visit_id, checklist_item_id | reading_field_id)` for responses/readings, so retries are idempotent (verified by DB tests). `client_updated_at` supports last-writer-wins on the technician's own draft; the server rejects edits after submission (guard trigger), and the app surfaces that as a `SYNC_ERROR` with the server message instead of dropping data.
+
+**Photos**: captured → compressed (`expo-image-manipulator`) + thumbnail → saved in the app's document directory → metadata row inserted locally → queued. Upload uses `upsert` to `pm-photos/<site_id>/<visit_id>/<photo_id>.jpg`, then the `pm_photos` row is upserted. Failed uploads stay queued with a visible message ("Photo upload failed. It will retry when Internet is available.").
+
+**Pull**: incremental by `updated_at` per table; server rows never overwrite local rows that are `PENDING_SYNC`.
+
+**Triggers for sync**: app foreground, connectivity regained (`expo-network`), manual "Sync now", and after each PM submission. Nothing is deleted locally until the server acknowledges it.
+
+**Session**: the Supabase session is persisted with AES-256-GCM (key in SecureStore, ciphertext in SQLite kv-store) — already implemented in Phase 1 — so a technician stays signed in without connectivity.
+
+**GPS** (Phase 5): captured at PM start (lat/lng/accuracy/timestamp), distance to site computed with haversine, compared to the site or default radius from `system_settings.geofence`; mode WARN / REQUIRE_REASON / BLOCK; result stored on the visit (`gps_status`, `gps_distance_m`, `gps_radius_m`, `geofence_mode`, `outside_radius_reason`).
+
+## 7. Phases
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Monorepo, Supabase schema + migrations, roles, RLS, storage policies, auth (web + mobile), basic web dashboard, basic mobile app, tests, CI | **Done** |
+| 2 | Admin UI: regions, clusters, counties, sites, users (invite, role, scope), technicians, supervisors, assignments; demo users | Planned |
+| 3 | PM scheduling, PM template management UI, PM visit engine (completion %, failure count, submission rules), PM review | Planned |
+| 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | Planned |
+| 5 | Photos, GPS/geofence, offline SQLite store, outbox sync | Planned |
+| 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | Planned |
+| 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | Planned |
+| 8 | PDF reports, CSV/Excel export, audit log UI | Planned |
+| 9 | Test expansion (E2E), security audit, performance, device testing | Planned |
+| 10 | Production deployment (Supabase, Vercel, EAS) | Planned |
+
+## Phase status
+
+### Phase 1 — delivered
+
+- Database: 8 migrations — foundation/enums, identity & organisation, PM templates & visits, failures/actions/support, security helpers & guards, RLS policies, storage, reference template. `seed.sql` holds demo data only.
+- Security: RLS on every table (asserted by test), no `anon` grants, guard triggers, audited admin role changes, login auditing (`record_login` RPC).
+- Types: `packages/shared/src/database.types.ts` generated from the migrated schema; CI fails if it drifts.
+- Web: login (server action, error states), session refresh in `proxy.ts`, inactive-account page, role-aware sidebar (future modules shown disabled with their phase), breadcrumbs, dashboard KPIs from live RLS-scoped counts, profile page (edit name/phone), loading/error states, security headers.
+- Mobile: login, encrypted session persistence, role gate (Technician/Maintenance), bottom tabs Home / Sites / PM / Actions / Profile with live data, pull-to-refresh, empty/error states, configuration error screen.
+- Tests: 55 DB tests (schema, template, RLS per role, storage, workflow guards), 35 unit tests (shared, web, mobile), Android bundle export check.
+
+### Known limitations after Phase 1
+
+- Checklist-driven failure *records* are not yet created automatically (the `is_failure` flag is computed server-side now; failure rows on submission arrive in Phase 6).
+- `pm_visits.completion_pct` and `failure_count` are columns only; server-side calculation arrives in Phase 3.
+- Analytics tables are defined but not yet populated (Phase 4).
+- Mobile app is online-only; offline storage/sync is Phase 5.
+- DB tests run on PostgreSQL 16 with a small Supabase shim (`supabase/tests/sql/00_supabase_shim.sql`). They have not yet been run against a full Supabase stack; do that with `supabase db reset` before production.
+- The Tienii report PDF was not available in the repository, so the demo seed includes only region + site; the demo visit and readings are added in Phase 4 from the report.

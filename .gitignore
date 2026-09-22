@@ -1,0 +1,37 @@
+node_modules/
+.pnpm-store/
+
+# env — never commit real secrets
+.env
+.env.*
+!.env.example
+apps/*/.env*
+!apps/*/.env.example
+
+# Next.js
+apps/web/.next/
+apps/web/out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Expo
+apps/mobile/.expo/
+apps/mobile/dist/
+apps/mobile/web-build/
+apps/mobile/ios/
+apps/mobile/android/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/
+
+# misc
+.DS_Store
+coverage/
+dist/
+*.log

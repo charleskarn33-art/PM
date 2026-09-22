@@ -1,0 +1,33 @@
+{
+  "name": "ipt-powertech-pm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "IPT PowerTech PM System \u2014 telecom site power preventive maintenance platform",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --parallel run typecheck",
+    "lint": "pnpm -r --parallel run lint",
+    "test": "pnpm --filter \"!@ipt/db-tests\" -r run test",
+    "test:db": "pnpm --filter @ipt/db-tests run test",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm test:db",
+    "dev:web": "pnpm --filter @ipt/web dev",
+    "dev:mobile": "pnpm --filter @ipt/mobile start",
+    "format": "prettier --write .",
+    "db:types": "node scripts/gen-db-types.mjs",
+    "db:types:check": "node scripts/gen-db-types.mjs --check"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "typescript": "5.9.3",
+    "pg": "^8.16.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "react": "19.2.3",
+      "react-dom": "19.2.3"
+    }
+  }
+}

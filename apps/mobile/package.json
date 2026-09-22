@@ -1,0 +1,39 @@
+{
+  "name": "@ipt/mobile",
+  "private": true,
+  "version": "0.1.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "bundle:check": "expo export --platform android --output-dir dist --no-minify"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@ipt/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.117.0",
+    "expo": "~57.0.24",
+    "expo-constants": "~57.0.19",
+    "expo-crypto": "~57.0.3",
+    "expo-linking": "~57.0.10",
+    "expo-router": "~57.0.22",
+    "expo-secure-store": "~57.0.4",
+    "expo-sqlite": "~57.0.3",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "eslint": "^9.35.0",
+    "eslint-config-expo": "~57.0.0",
+    "typescript": "5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
