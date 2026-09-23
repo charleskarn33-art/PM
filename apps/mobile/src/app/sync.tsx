@@ -15,6 +15,9 @@ const KIND_LABEL: Record<OpKind, string> = {
   'response.upsert': 'Checklist answer',
   'reading.upsert': 'Reading',
   'photo.upload': 'Photo',
+  'action.update': 'Corrective action status',
+  'action.note': 'Corrective action note',
+  'notification.read': 'Notification read',
 };
 
 export default function SyncScreen() {
@@ -22,9 +25,10 @@ export default function SyncScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const now = useNow();
   const query = useLocalQuery(async (s) => {
-    const [ops, visits, sites] = await Promise.all([s.ops(), s.visits(), s.sites()]);
+    const [ops, visits, sites, actions] = await Promise.all([s.ops(), s.visits(), s.sites(), s.actions()]);
     const siteName = new Map(sites.map((x) => [x.id, `${x.site_code} ${x.site_name}`]));
-    const label = new Map(visits.map((v) => [v.id, siteName.get(v.site_id) ?? 'PM']));
+    const label = new Map<string, string>(visits.map((v) => [v.id, `PM · ${siteName.get(v.site_id) ?? ''}`]));
+    for (const a of actions) label.set(a.id, `${a.action_number} · ${a.site_code} ${a.site_name}`);
     return { ops, label };
   }, 'sync');
 
@@ -70,7 +74,7 @@ export default function SyncScreen() {
       {query.error ? <Banner tone="danger" message={query.error} /> : null}
 
       {[...byVisit].map(([visitId, list]) => {
-        const name = query.data?.label.get(visitId) ?? 'PM';
+        const name = query.data?.label.get(visitId) ?? (list.every((o) => o.kind === 'notification.read') ? 'Notifications' : 'PM');
         const errors = list.filter((o) => o.state === 'ERROR');
         return (
           <Card key={visitId} style={{ gap: spacing.sm }}>

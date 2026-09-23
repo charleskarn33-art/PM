@@ -22,6 +22,16 @@ function RootNavigator() {
       <Stack.Protected guard={fieldUser}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="pm/[visitId]" options={{ headerShown: false }} />
+        <Stack.Screen name="action/[id]" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="notifications"
+          options={{
+            headerShown: true,
+            title: 'Notifications',
+            headerStyle: { backgroundColor: colors.navy },
+            headerTintColor: colors.white,
+          }}
+        />
         <Stack.Screen
           name="sync"
           options={{

@@ -31,6 +31,12 @@
         {
           "locationWhenInUsePermission": "Your location is recorded when you start a PM to confirm you are at the site."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0b1f3a"
+        }
       ]
     ],
     "experiments": {

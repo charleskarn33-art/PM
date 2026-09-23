@@ -3,7 +3,7 @@ import { migrate } from './db';
 import { LocalStore, opKeys, type VisitCreate } from './store';
 import { backoffMs, SyncEngine, SyncError, type SyncTransport } from './sync';
 import { NodeDb } from './testing/node-db';
-import type { BundleVisit, LocalResponse, PhotoUploadPayload, SyncBundle, Visit } from './types';
+import type { AppNotification, BundleAction, BundleVisit, LocalResponse, PhotoUploadPayload, SyncBundle, Visit } from './types';
 
 const USER = 'tech-1';
 const SITE = 'site-1';
@@ -15,6 +15,9 @@ class FakeServer implements SyncTransport {
   responses = new Map<string, Record<string, unknown>>();
   readings = new Map<string, Record<string, unknown>>();
   photos = new Map<string, PhotoUploadPayload['row']>();
+  actions = new Map<string, Record<string, unknown> & { id: string; status: string }>();
+  notes: Record<string, unknown>[] = [];
+  notifications = new Map<string, AppNotification>();
   offline = false;
   reject: ((kind: string, payload: Record<string, unknown>) => string | null) | null = null;
   /** Called while a request is "in flight" (to simulate edits during sync). */
@@ -56,6 +59,21 @@ class FakeServer implements SyncTransport {
     await this.gate('photo', p as unknown as Record<string, unknown>);
     this.photos.set(p.row.id, p.row);
   }
+  async updateAction(id: string, patch: Record<string, unknown>) {
+    await this.gate('action.update', patch);
+    const a = this.actions.get(id);
+    if (!a) throw new SyncError('rejected', 'not assigned');
+    Object.assign(a, patch);
+  }
+  async addActionNote(p: Record<string, unknown>) {
+    await this.gate('action.note', p);
+    if (!this.notes.some((n) => n.id === p.id)) this.notes.push({ ...p });
+  }
+  async markNotificationRead(id: string, readAt: string) {
+    await this.gate('notification.read', { id });
+    const n = this.notifications.get(id);
+    if (n) n.read_at = readAt;
+  }
   async fetchBundle(): Promise<SyncBundle> {
     this.calls.push('bundle');
     if (this.offline) throw new SyncError('network', 'Network request failed');
@@ -77,6 +95,8 @@ class FakeServer implements SyncTransport {
       schedules: [],
       templates: [],
       visits,
+      actions: [...this.actions.values()].map((a) => ({ ...a, updates: this.notes.filter((n) => n.corrective_action_id === a.id) as never[], photos: [...this.photos.values()].filter((p) => p.corrective_action_id === a.id).map((p) => ({ ...p, created_at: p.taken_at })) as never[] }) as unknown as BundleAction),
+      notifications: [...this.notifications.values()],
       settings: { geofence: { radius_m: 100, mode: 'WARN' } },
       consistency_rules: [],
     };
@@ -192,7 +212,7 @@ beforeEach(async () => {
 describe('local schema', () => {
   it('migrates once and is idempotent', async () => {
     await migrate(db);
-    expect((await db.first<{ user_version: number }>('pragma user_version'))?.user_version).toBe(1);
+    expect((await db.first<{ user_version: number }>('pragma user_version'))?.user_version).toBe(2);
   });
 });
 
@@ -432,5 +452,106 @@ describe('SyncEngine', () => {
     const [a, b] = await Promise.all([engine.run(), engine.run()]);
     expect(a).toBe(b);
     expect(server.calls.filter((c) => c === 'visit.create')).toHaveLength(1);
+  });
+});
+
+describe('corrective actions and notifications offline', () => {
+  function seedAction(id: string, status = 'ASSIGNED') {
+    server.actions.set(id, {
+      id,
+      action_number: 'CA-000001',
+      site_id: SITE,
+      site_code: 'S1',
+      site_name: 'Site one',
+      status,
+      resolution: null,
+      description: 'Replace hose',
+      failure_number: 'FL-000001',
+    });
+  }
+  const notification = (id: string, read_at: string | null = null) =>
+    ({ id, recipient_id: USER, type: 'CORRECTIVE_ACTION_ASSIGNED', title: 'Assigned', body: null, entity_type: 'corrective_action', entity_id: 'a1', read_at, push_sent_at: null, created_at: '2026-09-23T09:00:00.000Z', dedupe_key: null }) as AppNotification;
+
+  it('upgrades a version-1 phone database in place', async () => {
+    // An installed v1 database: v1 tables with data, no Phase 6 tables.
+    const old = new NodeDb();
+    await migrate(old);
+    await old.exec('drop table actions; drop table notifications; pragma user_version = 1;');
+    await old.run(`insert into documents (key, json, updated_at) values ('owner', '{"userId":"u"}', 'now')`);
+    await migrate(old);
+    expect(await old.first(`select json from documents where key = 'owner'`)).toEqual({ json: '{"userId":"u"}' });
+    expect((await old.first<{ user_version: number }>('pragma user_version'))?.user_version).toBe(2);
+    expect(await old.all(`select name from sqlite_master where name in ('actions', 'notifications') order by name`)).toEqual([
+      { name: 'actions' },
+      { name: 'notifications' },
+    ]);
+  });
+
+  it('works an action offline: start, note, photo, complete — then sends it all in order', async () => {
+    seedAction('a1');
+    await engine.run();
+    expect((await store.actions()).map((a) => [a.id, a.status, a.pending])).toEqual([['a1', 'ASSIGNED', false]]);
+
+    server.offline = true;
+    await store.updateAction('a1', { status: 'IN_PROGRESS' });
+    await store.addActionNote('a1', 'n1', 'Parts collected from store');
+    await store.addPhoto({ ...photo('p1', 'x'), row: { ...photo('p1', 'x').row, visit_id: null, corrective_action_id: 'a1', checklist_item_id: null } });
+    await expect(store.updateAction('a1', { status: 'COMPLETED', resolution: '  ' })).rejects.toThrow(/Describe what was done/);
+    await store.updateAction('a1', { status: 'COMPLETED', resolution: 'Hose replaced' });
+    await expect(store.updateAction('a1', { status: 'IN_PROGRESS' })).rejects.toThrow(/cannot go back/);
+
+    const local = (await store.actionData('a1'))!;
+    expect(local.action).toMatchObject({ status: 'COMPLETED', resolution: 'Hose replaced' });
+    expect(local.action.updates).toEqual([expect.objectContaining({ id: 'n1', note: 'Parts collected from store', pending: true })]);
+    expect(local.photos).toEqual([expect.objectContaining({ id: 'p1', pending: true })]);
+    // Status changes coalesce into one operation.
+    expect((await store.ops()).map((o) => o.kind)).toEqual(['action.update', 'action.note', 'photo.upload']);
+    await engine.run();
+    expect((await store.actions())[0]).toMatchObject({ pending: true });
+
+    server.offline = false;
+    server.calls = [];
+    await engine.run({ force: true });
+    expect(server.calls).toEqual(['action.update', 'action.note', 'photo', 'bundle']);
+    expect(server.actions.get('a1')).toMatchObject({ status: 'COMPLETED', resolution: 'Hose replaced' });
+    const synced = (await store.actionData('a1'))!;
+    expect(synced.action.updates).toEqual([expect.objectContaining({ id: 'n1' })]); // server copy, not duplicated
+    expect(synced.action.updates[0]!.pending).toBeUndefined();
+    expect(synced.photos).toEqual([expect.objectContaining({ id: 'p1', pending: false, local_uri: 'file:///docs/p1.jpg' })]);
+  });
+
+  it('download keeps an unsent status change; actions no longer assigned are removed with their files', async () => {
+    seedAction('a1');
+    seedAction('a2');
+    await engine.run();
+    await store.addPhoto({ ...photo('p2', 'x'), row: { ...photo('p2', 'x').row, visit_id: null, corrective_action_id: 'a2' } });
+    await engine.run();
+
+    await store.updateAction('a1', { status: 'IN_PROGRESS' });
+    server.actions.delete('a2');
+    server.photos.delete('p2');
+    const { removedFiles } = await store.applyBundle(await server.fetchBundle(), USER);
+    expect((await store.action('a1'))?.status).toBe('IN_PROGRESS');
+    expect(await store.action('a2')).toBeNull();
+    expect(removedFiles).toEqual(['file:///docs/p2.jpg', 'file:///docs/p2_thumb.jpg']);
+  });
+
+  it('marks notifications read on the phone and on the server', async () => {
+    server.notifications.set('n1', notification('n1'));
+    server.notifications.set('n2', notification('n2', '2026-09-23T10:00:00.000Z'));
+    await engine.run();
+    expect(await store.unreadCount()).toBe(1);
+    server.offline = true;
+    await store.markNotificationRead('n1');
+    await store.markNotificationRead('n1'); // already read: no second op
+    expect(await store.unreadCount()).toBe(0);
+    expect((await store.ops()).map((o) => o.key)).toEqual([opKeys.notificationRead('n1')]);
+    // A download before the read is sent does not bring the badge back.
+    server.offline = false;
+    await store.applyBundle(await server.fetchBundle(), USER);
+    expect(await store.unreadCount()).toBe(0);
+    await engine.run();
+    expect(server.notifications.get('n1')?.read_at).not.toBeNull();
+    expect(await store.ops()).toEqual([]);
   });
 });

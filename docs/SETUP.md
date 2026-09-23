@@ -81,11 +81,27 @@ cp apps/mobile/.env.example apps/mobile/.env   # set URL + publishable key
 pnpm dev:mobile                                # Expo dev server
 ```
 
-The app uses native modules (SecureStore, SQLite, Crypto, Camera, Location, File System, Image Manipulator, Network). Use a development build (`npx expo run:android` / `run:ios` or EAS Build); Expo Go is not enough. Builds for distribution: EAS (`eas build`), with `EXPO_PUBLIC_*` variables set as EAS environment variables.
+The app uses native modules (SecureStore, SQLite, Crypto, Camera, Location, File System, Image Manipulator, Network, Notifications, Device). Use a development build (`npx expo run:android` / `run:ios` or EAS Build); Expo Go is not enough. Builds for distribution: EAS (`eas build`), with `EXPO_PUBLIC_*` variables set as EAS environment variables.
 
 Permissions (configured in `app.json`): camera (evidence photos) and location while the app is in use (GPS check-in at PM start). Location is never tracked in the background.
 
 **Offline use**: a technician must sign in and sync once with a connection; after that the PM list, sites and checklists work without a connection and changes are sent automatically when the connection returns. Photos are kept in the app's own storage until uploaded. Signing out with unsent work keeps that work on the phone until the same account signs in again.
+
+**Push notifications** (optional; the in-app notification list works without them):
+
+1. App build: run `eas init` so `app.json` has `extra.eas.projectId` (Expo push tokens need it), and configure FCM/APNs credentials with `eas credentials`.
+2. Deploy the sender: `supabase functions deploy send-push --no-verify-jwt`, then `supabase secrets set PUSH_FUNCTION_SECRET=<random string>` (and optionally `EXPO_ACCESS_TOKEN` if enhanced push security is enabled in Expo). The function uses the service role key that Supabase provides to Edge Functions; it is never shipped to an app.
+3. Call it every minute (Database → Extensions: enable `pg_cron` and `pg_net`):
+
+```sql
+select cron.schedule('ipt-send-push', '* * * * *', $$
+  select net.http_post(
+    url := 'https://<project-ref>.supabase.co/functions/v1/send-push',
+    headers := jsonb_build_object('Authorization', 'Bearer <PUSH_FUNCTION_SECRET>'))
+$$);
+```
+
+**Reminders** (`system_settings.notifications`): `pm_due_reminder_days` (days before the due date to remind the technician; null = off) and `corrective_action_overdue_enabled`. They are sent by `run_daily_notifications()`, scheduled daily by the migration when pg_cron is enabled; if you enable pg_cron later, schedule it yourself: `select cron.schedule('ipt-daily-notifications', '30 6 * * *', 'select public.run_daily_notifications()');`.
 
 **Settings** (web, Super Admin → Settings): GPS geofence radius and mode (WARN / REQUIRE_REASON / BLOCK), evidence-photo enforcement, DC high-load thresholds (empty = no flag) and consistency rules. Phones pick up changes on their next sync; the server always applies the current settings.
 

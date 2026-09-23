@@ -17,7 +17,7 @@ import { LocalStore, opKeys, type VisitCreate } from '../../../apps/mobile/src/o
 import { supabaseTransport } from '../../../apps/mobile/src/offline/supabase-transport';
 import { SyncEngine } from '../../../apps/mobile/src/offline/sync';
 import { NodeDb } from '../../../apps/mobile/src/offline/testing/node-db';
-import { photoPaths, type BundleTemplate, type LocalResponse } from '../../../apps/mobile/src/offline/types';
+import { actionPhotoPaths, photoPaths, type BundleTemplate, type LocalResponse } from '../../../apps/mobile/src/offline/types';
 import { actAs, getPool, ids } from './db';
 import { PGRST_URL, postgrestBinary, signJwt } from './postgrest';
 
@@ -64,6 +64,7 @@ function phone(userId: string) {
   const token = signJwt(userId);
   const client = createClient<Database>(API, token, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    db: { retry: false }, // as in the app (apps/mobile/src/lib/supabase.ts)
     global: { fetch: makeFetch(userId, net), headers: { Authorization: `Bearer ${token}` } },
   });
   const photoBytes = async () => new TextEncoder().encode('fake-jpeg').buffer as ArrayBuffer;
@@ -175,6 +176,7 @@ async function completeChecklist(store: LocalStore, visitId: string, template: B
 }
 
 const created: string[] = [];
+const createdActions: string[] = [];
 
 describe.skipIf(!postgrestBinary())('mobile offline sync end to end (real API)', () => {
   let template: BundleTemplate;
@@ -189,12 +191,15 @@ describe.skipIf(!postgrestBinary())('mobile offline sync end to end (real API)',
   });
 
   afterAll(async () => {
-    if (!created.length) return;
+    if (!created.length && !createdActions.length) return;
     const c = await getPool().connect();
     try {
       await c.query('begin');
       await actAs(c, null);
       await c.query(`select set_config('ipt.system_update', 'on', true)`);
+      await c.query('delete from public.pm_photos where corrective_action_id = any($1::uuid[])', [createdActions]);
+      await c.query('delete from public.notifications where entity_id = any($1::uuid[])', [createdActions]);
+      await c.query('delete from public.corrective_actions where id = any($1::uuid[])', [createdActions]);
       await c.query('delete from public.pm_photos where visit_id = any($1::uuid[])', [created]);
       await c.query('delete from public.pm_responses where visit_id = any($1::uuid[])', [created]);
       await c.query('delete from public.pm_readings where visit_id = any($1::uuid[])', [created]);
@@ -308,5 +313,86 @@ describe.skipIf(!postgrestBinary())('mobile offline sync end to end (real API)',
     const r = await engine.run();
     expect(r.rejected).toBe(1);
     expect((await store.ops())[0]).toMatchObject({ state: 'ERROR' });
+  });
+
+  it('corrective action worked offline on the phone reaches the server: start, note, photo, complete', async () => {
+    // Supervisor C assigns an action to tech.c (as the web portal does).
+    const c = await getPool().connect();
+    let actionId: string;
+    try {
+      await c.query('begin');
+      await actAs(c, ids.supervisorC);
+      actionId = (
+        await c.query(
+          `insert into public.corrective_actions (site_id, category, description, priority, assigned_to, due_date)
+           values ($1, 'DC_SYSTEM', 'Replace rectifier fuse', 'HIGH', $2, current_date + 3) returning id`,
+          [SITE, USER],
+        )
+      ).rows[0].id;
+      await c.query('commit');
+    } finally {
+      c.release();
+    }
+    createdActions.push(actionId);
+
+    const { store, db, engine, net } = phone(USER);
+    await migrate(db);
+    await engine.run();
+    expect((await store.actions()).map((a) => [a.id, a.status])).toEqual([[actionId, 'ASSIGNED']]);
+    expect((await store.notifications()).some((n) => n.entity_id === actionId && n.type === 'CORRECTIVE_ACTION_ASSIGNED')).toBe(true);
+
+    net.offline = true;
+    await store.updateAction(actionId, { status: 'IN_PROGRESS' });
+    await store.addActionNote(actionId, randomUUID(), 'Fuse holder cracked; replacing both.');
+    const photoId = randomUUID();
+    const paths = actionPhotoPaths(SITE, actionId, photoId);
+    await store.addPhoto({
+      row: {
+        id: photoId, site_id: SITE, visit_id: null, corrective_action_id: actionId, section_id: null, checklist_item_id: null,
+        bucket: 'pm-photos', file_path: paths.file, thumbnail_path: paths.thumb, mime_type: 'image/jpeg',
+        size_bytes: 9, width: 1600, height: 1200, latitude: null, longitude: null, taken_at: new Date().toISOString(),
+      },
+      local_uri: `file:///test/${photoId}.jpg`,
+      thumb_uri: `file:///test/${photoId}_thumb.jpg`,
+    });
+    await store.updateAction(actionId, { status: 'COMPLETED', resolution: 'Fuse and holder replaced; load restored.' });
+    const unread = (await store.notifications()).find((n) => !n.read_at)!;
+    await store.markNotificationRead(unread.id);
+    expect(await engine.run()).toMatchObject({ offline: true, sent: 0 });
+
+    net.offline = false;
+    const r = await engine.run({ force: true });
+    expect(r).toMatchObject({ rejected: 0, error: null, downloaded: true });
+    expect(await store.ops()).toEqual([]);
+
+    const check = await getPool().connect();
+    try {
+      const a = await check.query(`select status, resolution, completed_at from public.corrective_actions where id = $1`, [actionId]);
+      expect(a.rows[0]).toMatchObject({ status: 'COMPLETED', resolution: 'Fuse and holder replaced; load restored.' });
+      const timeline = await check.query(`select to_status, note from public.corrective_action_updates where corrective_action_id = $1 order by created_at`, [actionId]);
+      expect(timeline.rows.map((u) => u.note ?? u.to_status)).toEqual(expect.arrayContaining(['COMPLETED', 'Fuse holder cracked; replacing both.']));
+      const photos = await check.query(`select file_path from public.pm_photos where corrective_action_id = $1`, [actionId]);
+      expect(photos.rows).toEqual([{ file_path: paths.file }]);
+      const n = await check.query(`select read_at from public.notifications where id = $1`, [unread.id]);
+      expect(n.rows[0].read_at).not.toBeNull();
+      const sup = await check.query(`select count(*)::int as n from public.notifications where recipient_id = $1 and type = 'CORRECTIVE_ACTION_COMPLETED' and entity_id = $2`, [ids.supervisorC, actionId]);
+      expect(sup.rows[0].n).toBe(1);
+    } finally {
+      check.release();
+    }
+
+    // The supervisor verifies; a resend of the old "completed" change after that is harmless.
+    const v = await getPool().connect();
+    try {
+      await v.query('begin');
+      await actAs(v, ids.supervisorC);
+      await v.query(`update public.corrective_actions set status = 'VERIFIED' where id = $1`, [actionId]);
+      await v.query('commit');
+    } finally {
+      v.release();
+    }
+    await store.updateAction(actionId, { status: 'COMPLETED', resolution: 'Fuse and holder replaced; load restored.' }).catch(() => undefined);
+    await engine.run();
+    expect((await store.ops()).filter((o) => o.state === 'ERROR')).toEqual([]);
   });
 });

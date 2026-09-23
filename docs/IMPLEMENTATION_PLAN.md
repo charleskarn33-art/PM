@@ -137,7 +137,7 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 | 3 | PM scheduling, PM template management UI, PM visit engine (completion %, failure count, submission rules), PM review | **Done** |
 | 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | **Done** (except the Tienii demo visit — needs the report values) |
 | 5 | Photos, GPS/geofence, offline SQLite store, outbox sync, Settings | **Done** |
-| 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | Planned |
+| 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | **Done** (push needs deployment setup) |
 | 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | Planned |
 | 8 | PDF reports, CSV/Excel export, audit log UI | Planned |
 | 9 | Test expansion (E2E), security audit, performance, device testing | Planned |
@@ -202,12 +202,31 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 - Web: **Admin → Settings** (GPS geofence radius and mode, photo enforcement, DC high-load thresholds, consistency rules add/edit/deactivate; all audited), PM review page shows the **GPS check-in** (position, accuracy, distance, radius, mode, technician's reason) and **photo thumbnails** per item/section via short-lived signed URLs (shows "Not available" if a file cannot be signed), and the **DC high-load** flag when thresholds are configured.
 - Tests: store and sync engine on a real SQL engine (node:sqlite) with a simulated server — ordering, coalescing, edits during sending, back-off, refusals holding one visit only, withdraw/discard, download never overwriting unsent work, account switching; error classification; and an **end-to-end test** of the phone's real sync code through PostgREST (own fixtures, commits real rows then removes them) that completes a full PM offline, sends it and gets it accepted, including a photo.
 
+### Phase 6 — delivered
+
+- Database (migration `…1300_failures_actions_notifications.sql`):
+  - **Failures from a submitted PM**: one per failing checklist answer (sections marked N/A excluded), with the section as category, the item's configured severity and the technician's answer and comment as description. A resubmission after rejection updates them instead of duplicating; a failure the technician fixed before anyone acted on it is removed. Manual failures can be reported by supervisors (web) and technicians on their sites.
+  - **Failure status follows its corrective actions** (least advanced action wins: Assigned → In progress → Resolved → Verified → Closed). Supervisors can close a failure without further work only with a note and only when no action is open, and can reopen it. Source, site, visit and item of a failure cannot be changed.
+  - **Corrective actions**: site, visit and category come from the failure; assignees must be active technicians, maintenance users or supervisors (`corrective_action_assignees(site)` lists the eligible people); a completed action can be **returned** to the assignee with a required note (`return_corrective_action`); every status change and note is on the timeline.
+  - **Notifications** (`private.notify`, never to the person who caused them, never to inactive users, de-duplicated by key): PM submitted (supervisor), approved / returned (technician), PM scheduled and site assigned (technician), PM overdue (technician + supervisor), critical failure (site supervisor + regional managers), corrective action assigned / returned (assignee), completed (supervisor + assigner). Daily job `run_daily_notifications()` (pg_cron) sends PM-due reminders and overdue corrective-action alerts **only when configured** in `system_settings.notifications`.
+  - **Push**: `push_tokens` (own rows only), `register_push_token` / `unregister_push_token`; the **`send-push` Edge Function** sends pending notifications through the Expo push service with the service role (server side) and removes tokens Expo reports as unregistered.
+  - Views `failure_overview`, `corrective_action_overview` (with overdue flag); `can_manage_site(site)` for the UI; `mobile_sync_bundle()` now includes the user's corrective actions (timeline, photos) and recent notifications.
+- Web: **Failures** (filters, detail with evidence photos, create corrective action with assignee/priority/due date, severity, close with note / reopen, report a manual failure), **Corrective Actions** (filters incl. overdue and "assigned to me"; detail with start/complete for the assignee, verify / return with note / close / edit / close-with-reason for supervisors, notes, timeline, photos), **notification bell** with unread count and a **Notifications** page (mark read / all read, links to the item), failures raised shown on the PM review page.
+- Mobile: corrective actions in the offline copy (local schema v2): **Actions** tab and action screen (start work, notes, photos, complete with what was done), all queued and sent in order like PM work; **Notifications** screen with unread bell in the header (marking read works offline); push registration on sign-in with the status shown on Profile, tapping a push opens the related screen, and sign-out unregisters the phone.
+- Tests: 14 DB tests for failures, workflow, notifications, push tokens and the bundle; API tests for the new screens' queries; offline store tests for actions and notifications (including a v1 → v2 local database upgrade); push message building; end-to-end phone sync of a corrective action through the real API (start, note, photo, completion, notification read, harmless resend after verification).
+
+### Known limitations after Phase 6
+
+- **Push delivery is not verified here**: sending needs the Edge Function deployed with `PUSH_FUNCTION_SECRET`, a schedule or webhook to call it, and an EAS project id in the app build (see SETUP.md). The message building and token clean-up logic is unit-tested; the Deno function itself was not run in this environment.
+- Notification settings (`pm_due_reminder_days`, `corrective_action_overdue_enabled`) are validated but still edited in SQL / the table editor; adding them to Admin → Settings is small and can be done with Phase 7/8 admin work.
+- Technicians see their failures through their PMs and corrective actions; they do not have a separate Failures screen.
+
 ### Known limitations after Phase 5
 
 - **Not run on a device in this environment**: the app bundles for Android and all sync logic is tested, but camera, GPS and background/foreground behaviour need a device or emulator run (Phase 9 device testing).
 - **Storage** is simulated in the end-to-end test and browser checks (the Supabase Storage server cannot run here); upload and signed-URL calls use the standard supabase-js Storage API.
 - Photos are uploaded as one request each (no resumable upload); a very slow connection retries the whole photo.
-- Corrective actions (Actions tab) and the Home "open actions" count are still online-only; they move into the offline copy with the corrective-action workflow in Phase 6.
+- ~~Corrective actions are still online-only~~ — offline since Phase 6.
 - The `notifications` setting is validated but not editable in Settings yet: it has no effect until notifications ship in Phase 6.
 
 ### Known limitations after Phase 4

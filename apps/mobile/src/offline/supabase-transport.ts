@@ -2,7 +2,7 @@ import type { Database } from '@ipt/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { classifyError, classifyThrown } from './errors';
 import { SyncError, type SyncTransport } from './sync';
-import type { PhotoUploadPayload, SyncBundle } from './types';
+import { ACTION_ORDER, type ActionStatus, type PhotoUploadPayload, type SyncBundle } from './types';
 
 type Client = SupabaseClient<Database>;
 type Result = { error: { message: string; code?: string } | null; status: number };
@@ -64,6 +64,7 @@ export function supabaseTransport(client: Client, readFile: ReadFile): SyncTrans
         client.from('pm_visits').update(patch as Database['public']['Tables']['pm_visits']['Update']).eq('id', visitId).select('id'),
       );
       if (!r.error && r.data?.length) return;
+      if (r.error && fail(r).kind === 'network') throw fail(r);
       const status = await visitStatus(visitId);
       if (status === 'SUBMITTED' || status === 'APPROVED') return;
       if (r.error) throw fail(r);
@@ -108,6 +109,37 @@ export function supabaseTransport(client: Client, readFile: ReadFile): SyncTrans
       }
       const r = await call(client.from('pm_photos').insert(row));
       if (r.error && r.error.code !== '23505') throw fail(r);
+    },
+
+    async updateAction(actionId, patch) {
+      const r = await call(
+        client.from('corrective_actions').update(patch as Database['public']['Tables']['corrective_actions']['Update']).eq('id', actionId).select('id'),
+      );
+      if (!r.error && r.data?.length) return;
+      if (r.error && fail(r).kind === 'network') throw fail(r);
+      // Resent after the app was killed, or the supervisor already moved it on: done if at or past the target.
+      const cur = await call(client.from('corrective_actions').select('status').eq('id', actionId).maybeSingle());
+      if (cur.error) throw fail(cur);
+      const target = patch.status as ActionStatus | undefined;
+      if (cur.data && target && ACTION_ORDER.indexOf(cur.data.status) >= ACTION_ORDER.indexOf(target)) return;
+      if (r.error) throw fail(r);
+      throw new SyncError('rejected', 'This corrective action is no longer assigned to you.');
+    },
+
+    async addActionNote(payload) {
+      const r = await call(
+        client.from('corrective_action_updates').insert({
+          id: payload.id as string,
+          corrective_action_id: payload.corrective_action_id as string,
+          note: payload.note as string,
+        }),
+      );
+      if (r.error && r.error.code !== '23505') throw fail(r);
+    },
+
+    async markNotificationRead(id, readAt) {
+      const r = await call(client.from('notifications').update({ read_at: readAt }).eq('id', id));
+      if (r.error) throw fail(r);
     },
 
     async fetchBundle() {

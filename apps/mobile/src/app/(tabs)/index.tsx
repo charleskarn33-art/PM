@@ -1,8 +1,6 @@
 import { isPmOverdue, OPEN_PM_STATUSES, ROLE_LABELS, toIsoDate } from '@ipt/shared';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Banner, Card, LoadingView } from '@/components/ui';
-import { supabase } from '@/lib/supabase';
-import { useRemoteQuery } from '@/lib/use-remote-query';
 import { SyncBar } from '@/components/sync-bar';
 import { useAuth } from '@/providers/auth-provider';
 import { useLocalQuery, useOffline } from '@/providers/offline-provider';
@@ -15,26 +13,15 @@ export default function HomeScreen() {
 
   const local = useLocalQuery(async (store) => {
     const today = toIsoDate(new Date());
-    const [sites, schedules] = await Promise.all([store.sites(), store.schedules()]);
+    const [sites, schedules, actions] = await Promise.all([store.sites(), store.schedules(), store.actions()]);
     const mine = schedules.filter((s) => s.technician_id === userId && [...OPEN_PM_STATUSES, 'REJECTED'].includes(s.status));
     return {
       sites: sites.length,
       openPm: mine.length,
       overduePm: mine.filter((s) => isPmOverdue(s.status, s.due_date, today)).length,
+      openActions: actions.filter((a) => a.status === 'OPEN' || a.status === 'ASSIGNED' || a.status === 'IN_PROGRESS').length,
     };
   }, `home:${userId}`);
-
-  // Corrective actions are not part of the offline copy yet (Phase 6); counted online when possible.
-  const actions = useRemoteQuery(async () => {
-    if (!supabase || !userId) throw new Error('Not signed in.');
-    const { count, error } = await supabase
-      .from('corrective_actions')
-      .select('id', { count: 'exact', head: true })
-      .eq('assigned_to', userId)
-      .in('status', ['OPEN', 'ASSIGNED', 'IN_PROGRESS']);
-    if (error) throw new Error(error.message);
-    return count ?? 0;
-  }, `home-actions:${userId}:${status.lastSyncedAt ?? ''}`);
 
   if (local.loading) return <LoadingView />;
   const c = local.data;
@@ -50,7 +37,7 @@ export default function HomeScreen() {
           <Stat label="My sites" value={c.sites} />
           <Stat label="Open PMs" value={c.openPm} />
           <Stat label="Overdue PMs" value={c.overduePm} danger={c.overduePm > 0} />
-          <Stat label="My open actions" value={actions.data ?? null} />
+          <Stat label="My open actions" value={c.openActions} />
         </View>
       ) : null}
     </ScrollView>

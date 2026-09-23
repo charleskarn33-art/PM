@@ -13,6 +13,9 @@ export const supabase: SupabaseClient<Database> | null = mobileEnv.ok
         persistSession: true,
         detectSessionInUrl: false,
       },
+      // The offline sync engine retries with its own back-off; library retries
+      // would only delay it (and the UI) while there is no connection.
+      db: { retry: false },
     })
   : null;
 

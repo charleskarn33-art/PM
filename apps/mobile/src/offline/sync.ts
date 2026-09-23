@@ -25,6 +25,11 @@ export interface SyncTransport {
   upsertResponse(payload: Record<string, unknown>): Promise<void>;
   upsertReading(payload: Record<string, unknown>): Promise<void>;
   uploadPhoto(payload: PhotoUploadPayload): Promise<void>;
+  /** Must succeed if the action is already at or past the requested status. */
+  updateAction(actionId: string, patch: Record<string, unknown>): Promise<void>;
+  /** Insert with the phone's note id; a repeat is a no-op. */
+  addActionNote(payload: Record<string, unknown>): Promise<void>;
+  markNotificationRead(id: string, readAt: string): Promise<void>;
   fetchBundle(): Promise<SyncBundle>;
 }
 
@@ -62,6 +67,12 @@ async function send(transport: SyncTransport, op: OutboxOp): Promise<void> {
       return transport.upsertReading(op.payload);
     case 'photo.upload':
       return transport.uploadPhoto(op.payload as unknown as PhotoUploadPayload);
+    case 'action.update':
+      return transport.updateAction(op.visit_id, op.payload);
+    case 'action.note':
+      return transport.addActionNote(op.payload);
+    case 'notification.read':
+      return transport.markNotificationRead(op.visit_id, String(op.payload.read_at));
   }
 }
 

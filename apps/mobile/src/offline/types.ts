@@ -28,6 +28,30 @@ export interface BundleSettings {
   dc_thresholds?: DcThresholds;
 }
 
+export type ActionStatus = Enums<'corrective_action_status'>;
+export interface ActionUpdate {
+  id: string;
+  from_status: ActionStatus | null;
+  to_status: ActionStatus | null;
+  note: string | null;
+  created_at: string;
+  author_name: string | null;
+  /** Written on this phone, not sent yet. */
+  pending?: boolean;
+}
+/** A corrective action assigned to the user, as downloaded. */
+export type BundleAction = Tables<'corrective_actions'> & {
+  site_code: string;
+  site_name: string;
+  failure_number: string | null;
+  failure_description: string | null;
+  failure_severity: Enums<'severity_level'> | null;
+  updates: ActionUpdate[];
+  photos: ServerPhoto[];
+};
+export type LocalAction = Omit<BundleAction, 'photos'>;
+export type AppNotification = Tables<'notifications'>;
+
 /** Shape returned by public.mobile_sync_bundle(). */
 export interface SyncBundle {
   generated_at: string;
@@ -35,6 +59,8 @@ export interface SyncBundle {
   schedules: Schedule[];
   templates: BundleTemplate[];
   visits: BundleVisit[];
+  actions: BundleAction[];
+  notifications: AppNotification[];
   settings: BundleSettings;
   consistency_rules: ConsistencyRule[];
 }
@@ -68,13 +94,23 @@ export interface LocalPhoto {
   pending: boolean;
 }
 
-export type OpKind = 'visit.create' | 'visit.update' | 'visit.submit' | 'response.upsert' | 'reading.upsert' | 'photo.upload';
+export type OpKind =
+  | 'visit.create'
+  | 'visit.update'
+  | 'visit.submit'
+  | 'response.upsert'
+  | 'reading.upsert'
+  | 'photo.upload'
+  | 'action.update'
+  | 'action.note'
+  | 'notification.read';
 export type OpState = 'PENDING' | 'SYNCING' | 'ERROR';
 
 export interface OutboxOp {
   seq: number;
   key: string;
   kind: OpKind;
+  /** Group the op belongs to (a visit, corrective action or notification id); ordering and holds apply per group. */
   visit_id: string;
   payload: Record<string, unknown>;
   state: OpState;
@@ -91,7 +127,8 @@ export interface PhotoUploadPayload {
   row: {
     id: string;
     site_id: string;
-    visit_id: string;
+    visit_id: string | null;
+    corrective_action_id?: string | null;
     section_id: string | null;
     checklist_item_id: string | null;
     bucket: 'pm-photos';
@@ -113,3 +150,11 @@ export interface PhotoUploadPayload {
 export function photoPaths(siteId: string, visitId: string, photoId: string) {
   return { file: `${siteId}/${visitId}/${photoId}.jpg`, thumb: `${siteId}/${visitId}/${photoId}_thumb.jpg` };
 }
+
+/** Corrective-action photos: <site>/ca-<action>/<photo>.jpg. */
+export function actionPhotoPaths(siteId: string, actionId: string, photoId: string) {
+  return photoPaths(siteId, `ca-${actionId}`, photoId);
+}
+
+/** Workflow order; an assignee only moves forward. */
+export const ACTION_ORDER: readonly ActionStatus[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'VERIFIED', 'CLOSED'];

@@ -18,7 +18,7 @@ export interface LocalDb {
  * exists for it (keyed like 'response:<visit>:<item>'), so no separate sync
  * flag can disagree with the queue.
  * Bump SCHEMA_VERSION and append a step to change it. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const STEPS: Record<number, string> = {
   1: `
@@ -67,6 +67,18 @@ const STEPS: Record<number, string> = {
       next_attempt_at text,
       created_at text not null,
       updated_at text not null
+    );
+  `,
+  // Phase 6: corrective actions assigned to the user, and their notifications.
+  2: `
+    create table if not exists actions (
+      id text primary key,
+      json text not null
+    );
+    create table if not exists notifications (
+      id text primary key,
+      json text not null,
+      created_at text not null
     );
   `,
 };

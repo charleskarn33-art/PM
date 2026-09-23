@@ -1,18 +1,23 @@
 import type { ConsistencyRule } from '@ipt/shared';
 import type { LocalDb, SqlParam } from './db';
-import type {
-  BundleSettings,
-  BundleTemplate,
-  LocalPhoto,
-  LocalReading,
-  LocalResponse,
-  OpKind,
-  OutboxOp,
-  PhotoUploadPayload,
-  Schedule,
-  Site,
-  SyncBundle,
-  Visit,
+import {
+  ACTION_ORDER,
+  type ActionStatus,
+  type ActionUpdate,
+  type AppNotification,
+  type LocalAction,
+  type BundleSettings,
+  type BundleTemplate,
+  type LocalPhoto,
+  type LocalReading,
+  type LocalResponse,
+  type OpKind,
+  type OutboxOp,
+  type PhotoUploadPayload,
+  type Schedule,
+  type Site,
+  type SyncBundle,
+  type Visit,
 } from './types';
 
 /** Visit columns the technician edits on the phone; everything else is the server's. */
@@ -88,7 +93,17 @@ export const opKeys = {
   response: (visitId: string, itemId: string) => `response:${visitId}:${itemId}`,
   reading: (visitId: string, fieldId: string) => `reading:${visitId}:${fieldId}`,
   photo: (photoId: string) => `photo:${photoId}`,
+  actionUpdate: (actionId: string) => `action.update:${actionId}`,
+  actionNote: (noteId: string) => `action.note:${noteId}`,
+  notificationRead: (id: string) => `notification.read:${id}`,
 };
+
+export interface ActionData {
+  action: LocalAction;
+  photos: LocalPhoto[];
+  pendingKeys: Set<string>;
+  errors: OutboxOp[];
+}
 
 const toOp = (r: OpRow): OutboxOp => ({ ...r, payload: JSON.parse(r.payload) as Record<string, unknown> });
 
@@ -220,6 +235,35 @@ export class LocalStore {
       for (const { id } of await this.db.all<{ id: string }>('select id from visits')) {
         if (serverIds.has(id) || pendingVisits.has(id)) continue;
         removedFiles.push(...(await this.deleteVisitLocally(id)));
+      }
+
+      // Corrective actions: server copy, keeping unsent status/resolution changes.
+      const actionIds = new Set((bundle.actions ?? []).map((a) => a.id));
+      for (const sa of bundle.actions ?? []) {
+        const { photos, ...server } = sa;
+        const local = await this.action(sa.id);
+        const merged: LocalAction = { ...server };
+        if (local && pendingKeys.has(opKeys.actionUpdate(sa.id))) {
+          merged.status = local.status;
+          merged.resolution = local.resolution;
+        }
+        await this.putAction(merged);
+        removedFiles.push(...(await this.mergeServerPhotos(sa.id, photos, pendingKeys)));
+      }
+      for (const { id } of await this.db.all<{ id: string }>('select id from actions')) {
+        if (actionIds.has(id) || pendingVisits.has(id)) continue;
+        removedFiles.push(...(await this.deleteGroupPhotos(id)));
+        await this.db.run('delete from actions where id = ?', [id]);
+      }
+
+      // Notifications: the server's recent list; a read not yet sent stays read.
+      const readLocally = new Set(
+        (await this.db.all<{ key: string }>("select key from outbox where kind = 'notification.read'")).map((r) => r.key),
+      );
+      await this.db.run('delete from notifications');
+      for (const n of bundle.notifications ?? []) {
+        const row = readLocally.has(opKeys.notificationRead(n.id)) ? { ...n, read_at: n.read_at ?? this.now() } : n;
+        await this.db.run('insert into notifications (id, json, created_at) values (?, ?, ?)', [n.id, JSON.stringify(row), n.created_at]);
       }
       await this.setDoc('last_sync', { at: bundle.generated_at });
     });
@@ -431,12 +475,15 @@ export class LocalStore {
 
   async addPhoto(p: PhotoUploadPayload): Promise<void> {
     const { local_uri, thumb_uri, row } = p;
+    // Photos are grouped with their PM visit or corrective action.
+    const group = row.visit_id ?? row.corrective_action_id;
+    if (!group) throw new Error('A photo must belong to a PM or a corrective action.');
     await this.db.transaction(async () => {
       await this.db.run(
         'insert into photos (id, visit_id, item_id, local_uri, thumb_uri, json, created_at) values (?, ?, ?, ?, ?, ?, ?)',
-        [row.id, row.visit_id, row.checklist_item_id, local_uri, thumb_uri, JSON.stringify(row), this.now()],
+        [row.id, group, row.checklist_item_id, local_uri, thumb_uri, JSON.stringify(row), this.now()],
       );
-      await this.enqueue(opKeys.photo(row.id), 'photo.upload', row.visit_id, p as unknown as Record<string, unknown>);
+      await this.enqueue(opKeys.photo(row.id), 'photo.upload', group, p as unknown as Record<string, unknown>);
     });
   }
 
@@ -554,11 +601,141 @@ export class LocalStore {
     return files;
   }
 
+  /** Replaces a group's synced photos with the server's list (unsent photos are kept). Returns files no longer needed. */
+  private async mergeServerPhotos(groupId: string, photos: ServerPhotoRow[], pendingKeys: Set<string>): Promise<string[]> {
+    const removed: string[] = [];
+    const serverIds = new Set(photos.map((p) => p.id));
+    for (const p of await this.photoRows(groupId)) {
+      if (serverIds.has(p.id) || pendingKeys.has(opKeys.photo(p.id))) continue;
+      removed.push(...[p.local_uri, p.thumb_uri].filter((u): u is string => !!u));
+      await this.db.run('delete from photos where id = ?', [p.id]);
+    }
+    for (const p of photos) {
+      await this.db.run(
+        `insert into photos (id, visit_id, item_id, local_uri, thumb_uri, json, created_at) values (?, ?, ?, null, null, ?, ?)
+         on conflict (id) do update set json = excluded.json`,
+        [p.id, groupId, p.checklist_item_id, JSON.stringify(serverPhoto(p)), p.created_at],
+      );
+    }
+    return removed;
+  }
+
+  private async deleteGroupPhotos(groupId: string): Promise<string[]> {
+    const files = (await this.photoRows(groupId)).flatMap((p) => [p.local_uri, p.thumb_uri].filter((u): u is string => !!u));
+    await this.db.run('delete from photos where visit_id = ?', [groupId]);
+    return files;
+  }
+
+  // ---- corrective actions ---------------------------------------------------
+  private async putAction(a: LocalAction) {
+    await this.db.run('insert into actions (id, json) values (?, ?) on conflict (id) do update set json = excluded.json', [a.id, JSON.stringify(a)]);
+  }
+
+  async action(id: string): Promise<LocalAction | null> {
+    const row = await this.db.first<{ json: string }>('select json from actions where id = ?', [id]);
+    return row ? (JSON.parse(row.json) as LocalAction) : null;
+  }
+
+  /** The user's corrective actions; `pending` when changes are waiting to be sent. */
+  async actions(): Promise<(LocalAction & { pending: boolean; refused: boolean })[]> {
+    const [rows, groups] = await Promise.all([
+      this.db.all<{ json: string }>('select json from actions'),
+      this.db.all<{ visit_id: string; errors: number }>(
+        "select visit_id, sum(case when state = 'ERROR' then 1 else 0 end) as errors from outbox group by visit_id",
+      ),
+    ]);
+    const byGroup = new Map(groups.map((g) => [g.visit_id, Number(g.errors)]));
+    return rows.map((r) => {
+      const a = JSON.parse(r.json) as LocalAction;
+      return { ...a, pending: byGroup.has(a.id), refused: (byGroup.get(a.id) ?? 0) > 0 };
+    });
+  }
+
+  /** An action with its photos and the notes written on this phone but not sent yet. */
+  async actionData(id: string): Promise<ActionData | null> {
+    const action = await this.action(id);
+    if (!action) return null;
+    const [photos, ops] = await Promise.all([
+      this.photos(id),
+      this.db.all<OpRow>('select * from outbox where visit_id = ? order by seq', [id]),
+    ]);
+    const pendingNotes: ActionUpdate[] = ops
+      .filter((o) => o.kind === 'action.note')
+      .map((o) => {
+        const p = JSON.parse(o.payload) as { id: string; note: string; created_at: string };
+        return { id: p.id, from_status: null, to_status: null, note: p.note, created_at: p.created_at, author_name: null, pending: true };
+      });
+    return {
+      action: { ...action, updates: [...action.updates, ...pendingNotes] },
+      photos,
+      pendingKeys: new Set(ops.map((o) => o.key)),
+      errors: ops.filter((o) => o.state === 'ERROR').map(toOp),
+    };
+  }
+
+  /**
+   * Start work or complete it (with the resolution). The assignee may only
+   * move forward; the server applies the same rule.
+   */
+  async updateAction(id: string, patch: { status: ActionStatus; resolution?: string | null }): Promise<LocalAction> {
+    let updated: LocalAction | null = null;
+    await this.db.transaction(async () => {
+      const a = await this.action(id);
+      if (!a) throw new Error('This corrective action is not on the phone.');
+      if (ACTION_ORDER.indexOf(patch.status) < ACTION_ORDER.indexOf(a.status)) {
+        throw new Error(`A corrective action cannot go back from ${a.status} to ${patch.status}.`);
+      }
+      if (patch.status === 'COMPLETED' && !patch.resolution?.trim()) throw new Error('Describe what was done.');
+      const now = this.now();
+      updated = { ...a, status: patch.status, resolution: patch.resolution ?? a.resolution, client_updated_at: now };
+      await this.putAction(updated);
+      const payload: Record<string, unknown> = { status: patch.status, client_updated_at: now };
+      if (patch.resolution !== undefined) payload.resolution = patch.resolution;
+      await this.enqueue(opKeys.actionUpdate(id), 'action.update', id, payload, 'merge');
+    });
+    return updated!;
+  }
+
+  async addActionNote(actionId: string, noteId: string, note: string): Promise<void> {
+    const text = note.trim();
+    if (!text) throw new Error('Write a note first.');
+    await this.enqueue(opKeys.actionNote(noteId), 'action.note', actionId, {
+      id: noteId,
+      corrective_action_id: actionId,
+      note: text,
+      created_at: this.now(),
+    });
+  }
+
+  // ---- notifications --------------------------------------------------------
+  async notifications(): Promise<AppNotification[]> {
+    const rows = await this.db.all<{ json: string }>('select json from notifications order by created_at desc');
+    return rows.map((r) => JSON.parse(r.json) as AppNotification);
+  }
+
+  async unreadCount(): Promise<number> {
+    return (await this.notifications()).filter((n) => !n.read_at).length;
+  }
+
+  async markNotificationRead(id: string): Promise<void> {
+    await this.db.transaction(async () => {
+      const row = await this.db.first<{ json: string }>('select json from notifications where id = ?', [id]);
+      if (!row) return;
+      const n = JSON.parse(row.json) as AppNotification;
+      if (n.read_at) return;
+      const at = this.now();
+      await this.db.run('update notifications set json = ? where id = ?', [JSON.stringify({ ...n, read_at: at }), id]);
+      await this.enqueue(opKeys.notificationRead(id), 'notification.read', id, { id, read_at: at });
+    });
+  }
+
   private async wipe(): Promise<string[]> {
     const files = (await this.db.all<PhotoRow>('select * from photos')).flatMap((p) =>
       [p.local_uri, p.thumb_uri].filter((u): u is string => !!u),
     );
-    await this.db.exec('delete from photos; delete from responses; delete from readings; delete from visits; delete from outbox; delete from documents;');
+    await this.db.exec(
+      'delete from photos; delete from responses; delete from readings; delete from visits; delete from actions; delete from notifications; delete from outbox; delete from documents;',
+    );
     return files;
   }
 
@@ -573,10 +750,13 @@ export class LocalStore {
   }
 }
 
-function serverPhoto(p: SyncBundle['visits'][number]['photos'][number]) {
+type ServerPhotoRow = SyncBundle['visits'][number]['photos'][number];
+
+function serverPhoto(p: ServerPhotoRow) {
   return {
     id: p.id,
     visit_id: p.visit_id,
+    corrective_action_id: p.corrective_action_id,
     site_id: p.site_id,
     section_id: p.section_id,
     checklist_item_id: p.checklist_item_id,

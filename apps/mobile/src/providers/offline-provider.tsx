@@ -1,7 +1,11 @@
 import { File } from 'expo-file-system';
 import { addNetworkStateListener, getNetworkStateAsync } from 'expo-network';
+import * as Notifications from 'expo-notifications';
+import { useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
+import { notificationTarget } from '@/lib/notification-target';
+import { registerForPush, type PushData, type PushRegistration } from '@/lib/push';
 import { supabase } from '@/lib/supabase';
 import { openLocalDb } from '@/offline/expo-db';
 import { LocalStore, type OutboxSummary } from '@/offline/store';
@@ -29,6 +33,8 @@ interface OfflineContextValue {
   /** Increments whenever local data changes; screens re-read on change. */
   revision: number;
   status: SyncStatus;
+  /** Result of registering this phone for push notifications (null until tried). */
+  push: PushRegistration | null;
   syncNow: () => Promise<void>;
   /** Call after writing to the store: refreshes screens and schedules a sync. */
   changed: () => void;
@@ -72,6 +78,8 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
   });
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasOnline = useRef<boolean | null>(null);
+  const [push, setPush] = useState<PushRegistration | null>(null);
+  const router = useRouter();
 
   useEffect(() => {
     openLocalDb().then(
@@ -150,6 +158,27 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     };
   }, [engine, run]);
 
+  // Push: register once per signed-in user; a received push triggers a sync, a tapped one opens its screen.
+  useEffect(() => {
+    if (!userId || authStatus !== 'signed-in') return;
+    let cancelled = false;
+    void registerForPush().then((r) => {
+      if (!cancelled) setPush(r);
+    });
+    const received = Notifications.addNotificationReceivedListener(() => void run(true));
+    const tapped = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as PushData;
+      void run(true);
+      const target = notificationTarget({ entity_type: data.entity_type ?? null, entity_id: data.entity_id ?? null });
+      if (target) router.push(target);
+    });
+    return () => {
+      cancelled = true;
+      received.remove();
+      tapped.remove();
+    };
+  }, [userId, authStatus, run, router]);
+
   const changed = useCallback(() => {
     setRevision((r) => r + 1);
     void refreshStatus();
@@ -160,8 +189,8 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
   const syncNow = useCallback(() => run(true), [run]);
 
   const value = useMemo(
-    () => ({ store, storeError, revision, status, syncNow, changed, deleteFiles }),
-    [store, storeError, revision, status, syncNow, changed],
+    () => ({ store, storeError, revision, status, push, syncNow, changed, deleteFiles }),
+    [store, storeError, revision, status, push, syncNow, changed],
   );
   return <OfflineContext.Provider value={value}>{children}</OfflineContext.Provider>;
 }

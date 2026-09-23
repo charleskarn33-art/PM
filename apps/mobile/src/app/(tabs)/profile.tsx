@@ -4,16 +4,22 @@ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SyncBar } from '@/components/sync-bar';
 import { Card, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/providers/auth-provider';
+import { unregisterPush } from '@/lib/push';
 import { useOffline } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
 export default function ProfileScreen() {
   const { profile, signOut } = useAuth();
-  const { status } = useOffline();
+  const { status, push } = useOffline();
+
+  async function doSignOut() {
+    await unregisterPush(push?.ok ? push.token : null);
+    await signOut();
+  }
 
   function confirmSignOut() {
     if (status.outbox.pending === 0) {
-      void signOut();
+      void doSignOut();
       return;
     }
     Alert.alert(
@@ -21,7 +27,7 @@ export default function ProfileScreen() {
       `${status.outbox.pending} change(s) have not reached the server yet. They stay on this phone and are sent when you sign in again with this account. Sign out anyway?`,
       [
         { text: 'Stay signed in', style: 'cancel' },
-        { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
+        { text: 'Sign out', style: 'destructive', onPress: () => void doSignOut() },
       ],
     );
   }
@@ -35,6 +41,10 @@ export default function ProfileScreen() {
       </Card>
       <SyncBar />
       <Card>
+        <Row
+          label="Push notifications"
+          value={push == null ? 'Checking…' : push.ok ? 'On for this phone' : `Off — ${push.reason}`}
+        />
         <Row label="App version" value={Constants.expoConfig?.version ?? 'unknown'} />
       </Card>
       <PrimaryButton title="Sign out" variant="outline" onPress={confirmSignOut} />
