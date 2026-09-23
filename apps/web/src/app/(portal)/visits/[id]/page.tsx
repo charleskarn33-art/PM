@@ -13,6 +13,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
+import { SectionSummary } from '@/components/section-summary';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -51,7 +52,7 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
   const supabase = await createClient();
   const detail = await loadVisitDetail(supabase, id);
   if (!detail) notFound();
-  const { visit, raw, sections, items, readingFields, responses, readings, photoCounts, issues, state } = detail;
+  const { visit, raw, sections, items, readingFields, responses, readings, photoCounts, issues, state, analytics } = detail;
 
   const progress = visitProgress(state);
   const responseBy = new Map(responses.map((r) => [r.checklist_item_id, r]));
@@ -149,6 +150,13 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
               </CardHeader>
               {na.has(section.code) ? null : (
                 <CardContent className="space-y-4">
+                  {issues
+                    .filter((i) => i.issue === 'INCONSISTENT' && i.sectionCode === section.code)
+                    .map((i) => (
+                      <Alert key={i.refId} tone="warning">
+                        {i.label}
+                      </Alert>
+                    ))}
                   {sectionFields.length > 0 ? (
                     <dl className="grid gap-3 rounded-lg bg-muted/50 p-3 sm:grid-cols-2 lg:grid-cols-3">
                       {sectionFields.map((f) => {
@@ -165,6 +173,7 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
                       })}
                     </dl>
                   ) : null}
+                  <SectionSummary category={section.category} analytics={analytics} />
                   <ul className="divide-y">
                     {sectionItems.map((item) => {
                       const r = responseBy.get(item.id);

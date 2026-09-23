@@ -12,6 +12,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { LatestReadings } from '@/components/latest-readings';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -188,6 +189,8 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
           </CardContent>
         </Card>
       </div>
+
+      <LatestReadings supabase={supabase} siteId={id} />
 
       <Card>
         <CardHeader>

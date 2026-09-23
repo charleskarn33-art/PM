@@ -1,6 +1,6 @@
 # IPT PowerTech PM System — Technical Implementation Plan
 
-Status: **Phases 1–3 complete** (see [Phase status](#phase-status)). Later phases are planned below and are not yet implemented.
+Status: **Phases 1–4 complete** (see [Phase status](#phase-status)). Later phases are planned below and are not yet implemented.
 
 ## 1. Goals
 
@@ -132,7 +132,7 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
 | 1 | Monorepo, Supabase schema + migrations, roles, RLS, storage policies, auth (web + mobile), basic web dashboard, basic mobile app, tests, CI | **Done** |
 | 2 | Admin UI: regions, clusters, counties, sites, users (invite, role, scope), technicians, supervisors, assignments | **Done** |
 | 3 | PM scheduling, PM template management UI, PM visit engine (completion %, failure count, submission rules), PM review | **Done** |
-| 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | Planned |
+| 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | **Done** (except the Tienii demo visit — needs the report values) |
 | 5 | Photos, GPS/geofence, offline SQLite store, outbox sync | Planned |
 | 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | Planned |
 | 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | Planned |
@@ -176,6 +176,23 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
 - Shared: TypeScript mirror of the checklist rules (`visitProgress`, `visitIssues`, `numberError`), recurrence dates (month-end safe), template/schedule validation. A database test proves the shared rules produce exactly the database's completion %, failure count and issue list.
 - Web: **PM Schedule** (list with status/overdue/region/date filters; create one-off or recurring schedules; reschedule, reassign, cancel), **PM Visits & Review** (review queue, full checklist view with readings, answers, failures, comments, evidence counts, outstanding issues; approve / reject with required reason), **PM Templates** (versions, clone/activate, sections, readings and questions with every rule configurable, reordering, deactivation).
 - Mobile: PM tab (start from schedule with a device-generated visit id, continue, fix & resubmit), visit screen (progress bar, per-section progress, section N/A), section screen (large YES/NO/N/A buttons, numeric keypad with units and range checks, choice chips, text, dates, comments, failure and evidence notices, per-answer save status with retry), submit screen (issues by section, overall comments).
+
+### Phase 4 — delivered
+
+- Database (migration `…1100_section_modules.sql`):
+  - **Analytics projection**: answers and readings are copied into `generator_readings`, `dc_readings` (with the generated `dc_power_kw`), `dc_phase_currents`, `battery_readings`, `solar_readings` and `earthing_readings`, matched by `analytics_key`. Sections marked N/A are removed from the analytics; clearing a phase current removes that phase. Measured values are never modified.
+  - Progress and analytics refresh run **once per statement per visit** (statement-level triggers with transition tables), so a bulk sync of a whole checklist is one refresh, not one per answer.
+  - **Default N/A from site equipment**: Generator, Battery and Solar start as N/A when the site does not have that equipment; the technician can switch a section back on.
+  - **Consistency rules** (`pm_consistency_rules`, admin-editable data): DC modules operational ≤ installed, solar panels operational ≤ installed, damaged panels ≤ installed. Violations are `INCONSISTENT` submission issues. No engineering thresholds are seeded.
+- Shared: consistency rules in the TypeScript engine (still parity-tested against the database).
+- Web: section summaries on the PM review page (generator services performed; DC calculated kW, modules, phase-current table and total; battery, solar and earthing flags; consistency warnings), and a "Latest readings" card on the site page (submitted/approved PM only).
+- Mobile: live DC kW (V × A ÷ 1000) and phase total while entering the DC section, solar panels operational/installed, and consistency warnings as soon as values contradict.
+
+### Known limitations after Phase 4
+
+- **Tienii (1301) demo visit not seeded**: the reference report's recorded readings are needed; they were not provided with the PDF, so nothing is invented.
+- "Voltage from each battery" remains a YES/NO/N/A question with the voltages in its comment, as in the reference checklist; a per-battery table can be added as template configuration later if IPT PowerTech wants it.
+- Consistency rules have no admin screen yet (SQL / Supabase table editor); it is added with the Settings screens in Phase 5.
 
 ### Known limitations after Phase 3
 

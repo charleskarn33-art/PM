@@ -75,3 +75,29 @@ export function toReadingField(f: Field): ReadingField {
 export function unitSuffix(unit: string | null | undefined): string {
   return unit ? ` ${unit}` : '';
 }
+
+/** Numeric value entered for a keyed reading or item in this visit (null if blank). */
+export function keyedValue(
+  key: string,
+  fields: readonly Field[],
+  items: readonly Item[],
+  readings: ReadonlyMap<string, ReadingRow>,
+  responses: ReadonlyMap<string, ResponseRow>,
+): number | null {
+  const f = fields.find((x) => x.analytics_key === key);
+  if (f) return readings.get(f.id)?.numeric_value ?? null;
+  const i = items.find((x) => x.analytics_key === key);
+  return i ? (responses.get(i.id)?.numeric_value ?? null) : null;
+}
+
+/** Phase-current values entered in this visit, by phase number. */
+export function phaseCurrents(items: readonly Item[], responses: ReadonlyMap<string, ResponseRow>): { phase: number; amps: number }[] {
+  return items
+    .filter((i) => i.analytics_key === 'dc.phase_current')
+    .flatMap((i) => {
+      const amps = responses.get(i.id)?.numeric_value;
+      const phase = Number((i.metadata as { phase_number?: number }).phase_number);
+      return amps == null || !Number.isFinite(phase) ? [] : [{ phase, amps }];
+    })
+    .sort((a, b) => a.phase - b.phase);
+}

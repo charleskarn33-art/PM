@@ -1105,6 +1105,60 @@ export type Database = {
           },
         ];
       };
+      pm_consistency_rules: {
+        Row: {
+          id: string;
+          lhs_key: string;
+          operator: string;
+          rhs_key: string;
+          message: string;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+          created_by: string | null;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          lhs_key: string;
+          operator: string;
+          rhs_key: string;
+          message: string;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+          created_by?: string | null;
+          updated_by?: string | null;
+        };
+        Update: {
+          id?: string;
+          lhs_key?: string;
+          operator?: string;
+          rhs_key?: string;
+          message?: string;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+          created_by?: string | null;
+          updated_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'pm_consistency_rules_created_by_fkey';
+            columns: ['created_by'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+          {
+            foreignKeyName: 'pm_consistency_rules_updated_by_fkey';
+            columns: ['updated_by'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       pm_photos: {
         Row: {
           id: string;

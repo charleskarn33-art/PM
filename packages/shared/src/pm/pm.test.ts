@@ -16,6 +16,7 @@ const item = (id: string, section: string, over: Partial<ChecklistItem> = {}): C
   requires_photo_on_failure: false,
   requires_comment_on_answer: [],
   requires_photo_on_answer: [],
+  analytics_key: null,
   ...over,
 });
 
@@ -33,8 +34,9 @@ const base: ChecklistState = {
     item('old', 'g', { is_active: false }),
   ],
   readingFields: [
-    { id: 'hours', section_id: 'g', label: 'Running Hours', value_type: 'NUMBER', is_required: true, is_active: true },
-    { id: 'panels', section_id: 's', label: 'Panels Installed', value_type: 'NUMBER', is_required: true, is_active: true },
+    { id: 'hours', section_id: 'g', label: 'Running Hours', value_type: 'NUMBER', is_required: true, is_active: true, analytics_key: null },
+    { id: 'panels', section_id: 's', label: 'Panels Installed', value_type: 'NUMBER', is_required: true, is_active: true, analytics_key: 'solar.panels_installed' },
+    { id: 'ok', section_id: 's', label: 'Panels Operational', value_type: 'NUMBER', is_required: false, is_active: true, analytics_key: 'solar.panels_operational' },
   ],
   responses: [],
   readings: [],
@@ -102,6 +104,29 @@ describe('visitIssues', () => {
     expect(visitIssues(state).some((i) => i.issue === 'PHOTO_REQUIRED')).toBe(true);
     expect(visitIssues({ ...state, photoCounts: { burning_oil: 1 } }).some((i) => i.issue === 'PHOTO_REQUIRED')).toBe(false);
     expect(visitIssues({ ...state, enforcePhotoRequirements: false }).some((i) => i.issue === 'PHOTO_REQUIRED')).toBe(false);
+  });
+});
+
+describe('consistency rules', () => {
+  const rules = [
+    { id: 'r1', lhs_key: 'solar.panels_operational', operator: '<=', rhs_key: 'solar.panels_installed', message: 'Operational > installed', is_active: true },
+  ];
+  const withPanels = (installed: number, operational: number) => ({
+    ...base,
+    consistencyRules: rules,
+    readings: [
+      { reading_field_id: 'panels', numeric_value: installed, text_value: null },
+      { reading_field_id: 'ok', numeric_value: operational, text_value: null },
+    ],
+  });
+  it('reports contradicting values in applicable sections only', () => {
+    expect(visitIssues(withPanels(10, 12)).filter((i) => i.issue === 'INCONSISTENT')).toEqual([
+      { sectionCode: 'SOLAR', refType: 'rule', refId: 'r1', label: 'Operational > installed', issue: 'INCONSISTENT' },
+    ]);
+    expect(visitIssues(withPanels(10, 10)).some((i) => i.issue === 'INCONSISTENT')).toBe(false);
+    expect(visitIssues({ ...withPanels(10, 12), notApplicableSections: ['SOLAR'] }).some((i) => i.issue === 'INCONSISTENT')).toBe(false);
+    expect(visitIssues({ ...withPanels(10, 12), consistencyRules: [{ ...rules[0]!, is_active: false }] }).length).toBeGreaterThan(0);
+    expect(visitIssues({ ...withPanels(10, 12), consistencyRules: [{ ...rules[0]!, is_active: false }] }).some((i) => i.issue === 'INCONSISTENT')).toBe(false);
   });
 });
 

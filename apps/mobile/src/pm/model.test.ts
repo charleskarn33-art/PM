@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY_RESPONSE, parseNumberInput, progressBarText, readingUpsert, responseUpsert } from './model';
+import { EMPTY_RESPONSE, keyedValue, parseNumberInput, phaseCurrents, progressBarText, readingUpsert, responseUpsert, type Field, type Item } from './model';
 
 describe('parseNumberInput', () => {
   it('accepts decimals with dot or comma and clears on empty', () => {
@@ -48,5 +48,30 @@ describe('upsert rows', () => {
       label_snapshot: '',
       client_updated_at: 't',
     });
+  });
+});
+
+describe('keyed values', () => {
+  const field = (id: string, key: string) => ({ id, analytics_key: key }) as Field;
+  const item = (id: string, key: string, phase?: number) => ({ id, analytics_key: key, metadata: phase ? { phase_number: phase } : {} }) as Item;
+  it('finds values by analytics key in readings or items', () => {
+    const fields = [field('v', 'dc.rectifier_voltage_v')];
+    const items = [item('dmg', 'solar.damaged_panel_count')];
+    const readings = new Map([['v', { reading_field_id: 'v', numeric_value: 53.6, text_value: null }]]);
+    const responses = new Map([['dmg', { ...EMPTY_RESPONSE('dmg'), numeric_value: 2 }]]);
+    expect(keyedValue('dc.rectifier_voltage_v', fields, items, readings, responses)).toBe(53.6);
+    expect(keyedValue('solar.damaged_panel_count', fields, items, readings, responses)).toBe(2);
+    expect(keyedValue('dc.load_current_a', fields, items, readings, responses)).toBeNull();
+  });
+  it('collects entered phase currents in phase order', () => {
+    const items = [item('p3', 'dc.phase_current', 3), item('p1', 'dc.phase_current', 1), item('p2', 'dc.phase_current', 2)];
+    const responses = new Map([
+      ['p3', { ...EMPTY_RESPONSE('p3'), numeric_value: 9.1 }],
+      ['p1', { ...EMPTY_RESPONSE('p1'), numeric_value: 12.4 }],
+    ]);
+    expect(phaseCurrents(items, responses)).toEqual([
+      { phase: 1, amps: 12.4 },
+      { phase: 3, amps: 9.1 },
+    ]);
   });
 });

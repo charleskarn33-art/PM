@@ -6,6 +6,7 @@ import { Banner, Card, LoadingView, PrimaryButton } from '@/components/ui';
 import { usePmVisitContext } from '@/pm/context';
 import { ChoiceChips, NumberInput, Notice, SaveBadge, TextAnswer, YesNoNaButtons } from '@/pm/controls';
 import type { Item } from '@/pm/model';
+import { SectionLiveSummary } from '@/pm/section-summary';
 import { colors, spacing } from '@/theme';
 
 function todayIso(): string {
@@ -91,6 +92,12 @@ export default function SectionScreen() {
             </View>
           ) : null}
 
+          <SectionLiveSummary category={section.category} pm={pm} />
+          {pm.issues
+            .filter((i) => i.issue === 'INCONSISTENT' && i.sectionCode === section.code)
+            .map((i) => (
+              <Notice key={i.refId} tone="warning" text={i.label} />
+            ))}
           {fields.length > 0 ? (
             <Card style={{ gap: spacing.md }}>
               <Text style={styles.groupTitle}>Readings</Text>

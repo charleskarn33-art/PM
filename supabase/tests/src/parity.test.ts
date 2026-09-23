@@ -32,7 +32,9 @@ async function loadState(c: Client, visitId: string): Promise<ChecklistState> {
   const photos = await q<{ checklist_item_id: string; n: number }>(
     `select checklist_item_id, count(*)::int as n from public.pm_photos where visit_id = $1 and checklist_item_id is not null group by 1`,
   );
+  const consistencyRules = (await c.query(`select id, lhs_key, operator, rhs_key, message, is_active from public.pm_consistency_rules`)).rows;
   return {
+    consistencyRules,
     sections,
     items,
     readingFields,
@@ -68,7 +70,14 @@ describe('shared checklist rules match the database', () => {
       await c.query(
         `insert into public.pm_readings (visit_id, reading_field_id, label_snapshot, numeric_value)
          select $1, f.id, '', 50 from public.pm_reading_fields f join public.pm_sections s on s.id = f.section_id
-          join public.pm_templates t on t.id = s.template_id and t.status = 'ACTIVE' where f.code in ('running_hours', 'fuel_level')`,
+          join public.pm_templates t on t.id = s.template_id and t.status = 'ACTIVE' where f.code in ('running_hours', 'fuel_level', 'dc_modules_operational')`,
+        [visitId],
+      );
+      // 50 operational modules vs 4 installed: an INCONSISTENT issue on both sides.
+      await c.query(
+        `insert into public.pm_readings (visit_id, reading_field_id, label_snapshot, numeric_value)
+         select $1, f.id, '', 4 from public.pm_reading_fields f join public.pm_sections s on s.id = f.section_id
+          join public.pm_templates t on t.id = s.template_id and t.status = 'ACTIVE' where f.code = 'dc_modules_installed'`,
         [visitId],
       );
       await c.query(
@@ -91,6 +100,7 @@ describe('shared checklist rules match the database', () => {
       const localIssues = visitIssues(state).map((i) => `${i.refId}:${i.issue}`).sort();
       expect(localIssues).toEqual(dbIssues);
       expect(localIssues.length).toBeGreaterThan(0);
+      expect(localIssues.some((i) => i.endsWith(':INCONSISTENT'))).toBe(true);
     });
   });
 });

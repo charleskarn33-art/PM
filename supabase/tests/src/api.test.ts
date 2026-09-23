@@ -9,7 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { loadDashboard, monthPeriod } from '@/lib/dashboard';
 import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
-import { loadVisitDetail } from '@/lib/pm-visit';
+import { loadVisitAnalytics, loadVisitDetail } from '@/lib/pm-visit';
 import { parseSiteParams, siteQuery } from '@/lib/sites';
 import { ids } from './db';
 import { apiAs, postgrestBinary } from './postgrest';
@@ -222,6 +222,32 @@ describe.skipIf(!postgrestBinary())('PostgREST API', () => {
     it('pm_visit_issues RPC is not available anonymously', async () => {
       const r = await apiAs(null).rpc('pm_visit_issues', { p_visit_id: '00000000-0000-4000-8000-000000000000' });
       expect(r.error).not.toBeNull();
+    });
+  });
+
+  describe('Phase 4: section analytics queries', () => {
+    it('web: visit analytics loader and latest-reading queries resolve', async () => {
+      const analytics = await loadVisitAnalytics(as(ids.supervisorA), '00000000-0000-4000-8000-000000000000');
+      expect(analytics).toEqual({ generator: null, dc: null, phases: [], battery: null, solar: null, earthing: null });
+      for (const table of ['generator_readings', 'dc_readings', 'battery_readings', 'solar_readings', 'earthing_readings'] as const) {
+        const r = await apiAs(ids.supervisorA)
+          .from(table)
+          .select('*, pm_visits!inner(status)')
+          .eq('site_id', ids.siteA1)
+          .in('pm_visits.status', ['SUBMITTED', 'APPROVED'])
+          .order('recorded_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        expect(r.error, table).toBeNull();
+      }
+    });
+
+    it('apps: consistency rules are readable by active users', async () => {
+      const r = await apiAs(ids.techA).from('pm_consistency_rules').select('id, lhs_key, operator, rhs_key, message, is_active').eq('is_active', true);
+      expect(r.error).toBeNull();
+      expect(r.data).toHaveLength(3);
+      const anon = await apiAs(null).from('pm_consistency_rules').select('id');
+      expect(anon.error?.code).toBe('42501');
     });
   });
 });

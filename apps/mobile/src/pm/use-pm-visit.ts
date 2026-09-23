@@ -1,4 +1,5 @@
 import {
+  type ConsistencyRule,
   visitIssues,
   visitProgress,
   type ChecklistState,
@@ -63,6 +64,7 @@ export function usePmVisit(visitId: string): PmVisitModel {
   const [readings, setReadings] = useState(new Map<string, ReadingRow>());
   const [photoCounts, setPhotoCounts] = useState<Record<string, number>>({});
   const [enforcePhotos, setEnforcePhotos] = useState(true);
+  const [rules, setRules] = useState<ConsistencyRule[]>([]);
   const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const failed = useRef(new Map<string, () => Promise<void>>());
@@ -73,7 +75,7 @@ export function usePmVisit(visitId: string): PmVisitModel {
       if (!supabase) throw new Error('Not configured.');
       const v = await supabase.from('pm_visits').select('*').eq('id', visitId).single();
       if (v.error) throw new Error(v.error.message);
-      const [siteRes, secRes, respRes, readRes, photoRes, settingRes] = await Promise.all([
+      const [siteRes, secRes, respRes, readRes, photoRes, settingRes, rulesRes] = await Promise.all([
         supabase.from('sites').select('site_code, site_name').eq('id', v.data.site_id).maybeSingle(),
         supabase
           .from('pm_sections')
@@ -84,8 +86,9 @@ export function usePmVisit(visitId: string): PmVisitModel {
         supabase.from('pm_readings').select('reading_field_id, numeric_value, text_value').eq('visit_id', visitId),
         supabase.from('pm_photos').select('checklist_item_id').eq('visit_id', visitId),
         supabase.from('system_settings').select('value').eq('key', 'pm_submission').maybeSingle(),
+        supabase.from('pm_consistency_rules').select('id, lhs_key, operator, rhs_key, message, is_active').eq('is_active', true),
       ]);
-      for (const r of [siteRes, secRes, respRes, readRes, photoRes, settingRes]) if (r.error) throw new Error(r.error.message);
+      for (const r of [siteRes, secRes, respRes, readRes, photoRes, settingRes, rulesRes]) if (r.error) throw new Error(r.error.message);
       if (cancelled) return;
       const secs = secRes.data ?? [];
       setVisit(v.data);
@@ -98,6 +101,7 @@ export function usePmVisit(visitId: string): PmVisitModel {
       const counts: Record<string, number> = {};
       for (const p of photoRes.data ?? []) if (p.checklist_item_id) counts[p.checklist_item_id] = (counts[p.checklist_item_id] ?? 0) + 1;
       setPhotoCounts(counts);
+      setRules(rulesRes.data ?? []);
       setEnforcePhotos((settingRes.data?.value as { enforce_photo_requirements?: boolean } | null)?.enforce_photo_requirements ?? true);
       setError(null);
     })()
@@ -124,8 +128,9 @@ export function usePmVisit(visitId: string): PmVisitModel {
       photoCounts,
       notApplicableSections: visit?.not_applicable_sections ?? [],
       enforcePhotoRequirements: enforcePhotos,
+      consistencyRules: rules,
     }),
-    [sections, items, fields, responses, readings, photoCounts, visit?.not_applicable_sections, enforcePhotos],
+    [sections, items, fields, responses, readings, photoCounts, visit?.not_applicable_sections, enforcePhotos, rules],
   );
   const progress = useMemo(() => visitProgress(state), [state]);
   const issues = useMemo(() => visitIssues(state), [state]);

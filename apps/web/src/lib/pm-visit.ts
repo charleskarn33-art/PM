@@ -4,7 +4,37 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 type Client = SupabaseClient<Database>;
 
+export interface VisitAnalytics {
+  generator: Tables<'generator_readings'> | null;
+  dc: Tables<'dc_readings'> | null;
+  phases: Tables<'dc_phase_currents'>[];
+  battery: Tables<'battery_readings'> | null;
+  solar: Tables<'solar_readings'> | null;
+  earthing: Tables<'earthing_readings'> | null;
+}
+
+/** Section analytics rows projected by the database from the visit's answers. */
+export async function loadVisitAnalytics(supabase: Client, visitId: string): Promise<VisitAnalytics> {
+  const [generator, dc, phases, battery, solar, earthing] = await Promise.all([
+    supabase.from('generator_readings').select('*').eq('visit_id', visitId).maybeSingle(),
+    supabase.from('dc_readings').select('*').eq('visit_id', visitId).maybeSingle(),
+    supabase.from('dc_phase_currents').select('*').eq('visit_id', visitId).order('phase_number'),
+    supabase.from('battery_readings').select('*').eq('visit_id', visitId).maybeSingle(),
+    supabase.from('solar_readings').select('*').eq('visit_id', visitId).maybeSingle(),
+    supabase.from('earthing_readings').select('*').eq('visit_id', visitId).maybeSingle(),
+  ]);
+  return {
+    generator: must('generator readings', generator),
+    dc: must('DC readings', dc),
+    phases: must('phase currents', phases),
+    battery: must('battery readings', battery),
+    solar: must('solar readings', solar),
+    earthing: must('earthing readings', earthing),
+  };
+}
+
 export interface VisitDetail {
+  analytics: VisitAnalytics;
   visit: Tables<'pm_visit_overview'>;
   raw: Tables<'pm_visits'>;
   sections: Tables<'pm_sections'>[];
@@ -37,19 +67,23 @@ export async function loadVisitDetail(supabase: Client, id: string): Promise<Vis
     await supabase.from('pm_sections').select('*').eq('template_id', visitRow.template_id).order('sort_order'),
   );
   const sectionIds = sections.map((s) => s.id);
-  const [items, fields, responses, readings, photos, issues] = await Promise.all([
+  const [items, fields, responses, readings, photos, issues, rules, analytics] = await Promise.all([
     supabase.from('pm_checklist_items').select('*').in('section_id', sectionIds).order('sort_order'),
     supabase.from('pm_reading_fields').select('*').in('section_id', sectionIds).order('sort_order'),
     supabase.from('pm_responses').select('*').eq('visit_id', id),
     supabase.from('pm_readings').select('*').eq('visit_id', id),
     supabase.from('pm_photos').select('checklist_item_id').eq('visit_id', id),
     supabase.rpc('pm_visit_issues', { p_visit_id: id }),
+    supabase.from('pm_consistency_rules').select('id, lhs_key, operator, rhs_key, message, is_active').eq('is_active', true),
+    loadVisitAnalytics(supabase, id),
   ]);
   const photoCounts: Record<string, number> = {};
   for (const p of must('photos', photos)) {
     if (p.checklist_item_id) photoCounts[p.checklist_item_id] = (photoCounts[p.checklist_item_id] ?? 0) + 1;
   }
+  const consistencyRules = must('consistency rules', rules);
   const detail = {
+    analytics,
     visit,
     raw: visitRow,
     sections,
@@ -76,6 +110,7 @@ export async function loadVisitDetail(supabase: Client, id: string): Promise<Vis
       readings: detail.readings,
       photoCounts,
       notApplicableSections: visitRow.not_applicable_sections,
+      consistencyRules,
     },
   };
 }

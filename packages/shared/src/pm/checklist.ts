@@ -22,19 +22,24 @@ export type ChecklistItem = Pick<
   | 'requires_photo_on_failure'
   | 'requires_comment_on_answer'
   | 'requires_photo_on_answer'
+  | 'analytics_key'
 >;
-export type ReadingField = Pick<Tables<'pm_reading_fields'>, 'id' | 'section_id' | 'label' | 'value_type' | 'is_required' | 'is_active'>;
+export type ReadingField = Pick<
+  Tables<'pm_reading_fields'>,
+  'id' | 'section_id' | 'label' | 'value_type' | 'is_required' | 'is_active' | 'analytics_key'
+>;
+export type ConsistencyRule = Pick<Tables<'pm_consistency_rules'>, 'id' | 'lhs_key' | 'operator' | 'rhs_key' | 'message' | 'is_active'>;
 export type ResponseValue = Pick<
   Tables<'pm_responses'>,
   'checklist_item_id' | 'answer' | 'numeric_value' | 'text_value' | 'selected_options' | 'date_value' | 'datetime_value' | 'comment'
 >;
 export type ReadingValue = Pick<Tables<'pm_readings'>, 'reading_field_id' | 'numeric_value' | 'text_value'>;
 
-export type IssueKind = 'REQUIRED' | 'COMMENT_REQUIRED' | 'PHOTO_REQUIRED';
+export type IssueKind = 'REQUIRED' | 'COMMENT_REQUIRED' | 'PHOTO_REQUIRED' | 'INCONSISTENT';
 
 export interface VisitIssue {
   sectionCode: string;
-  refType: 'item' | 'reading';
+  refType: 'item' | 'reading' | 'rule';
   refId: string;
   label: string;
   issue: IssueKind;
@@ -50,6 +55,8 @@ export interface ChecklistState {
   photoCounts?: Readonly<Record<string, number>>;
   notApplicableSections: readonly string[];
   enforcePhotoRequirements?: boolean;
+  /** Active rules from pm_consistency_rules (e.g. operational <= installed). */
+  consistencyRules?: readonly ConsistencyRule[];
 }
 
 const blank = (s: string | null | undefined) => s == null || s.trim() === '';
@@ -132,6 +139,48 @@ export function visitIssues(state: ChecklistState): VisitIssue[] {
       issues.push({ sectionCode: sectionCode.get(field.section_id)!, refType: 'reading', refId: field.id, label: field.label, issue: 'REQUIRED' });
     }
   }
+  issues.push(...consistencyIssues(state));
+  return issues;
+}
+
+/** Numeric values by analytics key in applicable sections (single-valued keys). */
+export function keyedNumbers(state: ChecklistState): Map<string, { value: number; sectionCode: string }[]> {
+  const { sectionCode, items, fields, responses, readings } = applicable(state);
+  const out = new Map<string, { value: number; sectionCode: string }[]>();
+  const add = (key: string | null, value: number | null | undefined, section: string) => {
+    if (!key || value == null) return;
+    out.set(key, [...(out.get(key) ?? []), { value, sectionCode: section }]);
+  };
+  for (const f of fields) add(f.analytics_key, readings.get(f.id)?.numeric_value, sectionCode.get(f.section_id)!);
+  for (const i of items) {
+    if (i.analytics_key === 'dc.phase_current') continue;
+    add(i.analytics_key, responses.get(i.id)?.numeric_value, sectionCode.get(i.section_id)!);
+  }
+  return out;
+}
+
+const COMPARE: Record<string, (a: number, b: number) => boolean> = {
+  '<=': (a, b) => a <= b,
+  '<': (a, b) => a < b,
+  '>=': (a, b) => a >= b,
+  '>': (a, b) => a > b,
+  '=': (a, b) => a === b,
+};
+
+/** Mirrors the INCONSISTENT branch of private.visit_issues_for(). */
+export function consistencyIssues(state: ChecklistState): VisitIssue[] {
+  const values = keyedNumbers(state);
+  const issues: VisitIssue[] = [];
+  for (const rule of state.consistencyRules ?? []) {
+    if (!rule.is_active) continue;
+    for (const l of values.get(rule.lhs_key) ?? []) {
+      for (const r of values.get(rule.rhs_key) ?? []) {
+        if (!COMPARE[rule.operator]?.(l.value, r.value)) {
+          issues.push({ sectionCode: l.sectionCode, refType: 'rule', refId: rule.id, label: rule.message, issue: 'INCONSISTENT' });
+        }
+      }
+    }
+  }
   return issues;
 }
 
@@ -200,6 +249,7 @@ export const ISSUE_LABELS: Record<IssueKind, string> = {
   REQUIRED: 'Answer required',
   COMMENT_REQUIRED: 'Comment required',
   PHOTO_REQUIRED: 'Photo required',
+  INCONSISTENT: 'Values do not match',
 };
 
 /** "Unable to submit because 3 required fields are incomplete." */

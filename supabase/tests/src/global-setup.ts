@@ -81,11 +81,12 @@ function fixturesSql(): string {
       ('${ids.supervisorA}', '${ids.regionA}'),
       ('${ids.supervisorB}', '${ids.regionB}');
 
+    -- T-A1 has every power source (all sections apply); T-A2 / T-B1 have none.
     insert into public.sites (id, site_code, site_name, region_id, county_id, latitude, longitude,
-                              generator_available, supervisor_id) values
-      ('${ids.siteA1}', 'T-A1', 'Test Site A1', '${ids.regionB}', '${ids.countyA}', 7.0, -11.0, true, '${ids.supervisorA}'),
-      ('${ids.siteA2}', 'T-A2', 'Test Site A2', '${ids.regionA}', null, null, null, false, '${ids.supervisorA}'),
-      ('${ids.siteB1}', 'T-B1', 'Test Site B1', '${ids.regionB}', null, null, null, false, '${ids.supervisorB}');
+                              generator_available, battery_available, solar_available, supervisor_id) values
+      ('${ids.siteA1}', 'T-A1', 'Test Site A1', '${ids.regionB}', '${ids.countyA}', 7.0, -11.0, true, true, true, '${ids.supervisorA}'),
+      ('${ids.siteA2}', 'T-A2', 'Test Site A2', '${ids.regionA}', null, null, null, false, false, false, '${ids.supervisorA}'),
+      ('${ids.siteB1}', 'T-B1', 'Test Site B1', '${ids.regionB}', null, null, null, false, false, false, '${ids.supervisorB}');
 
     insert into public.site_assignments (site_id, technician_id) values
       ('${ids.siteA1}', '${ids.techA}'),
