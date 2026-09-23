@@ -95,35 +95,38 @@ Mechanics:
 - Storage: private buckets `pm-photos` and `site-documents`, object path starts with `<site_id>/`; object policies follow site access. Photo evidence can only be deleted by a Super Admin.
 - New sign-ups get an **inactive** profile; public sign-up is disabled in `supabase/config.toml`; the first admin is bootstrapped with `private.bootstrap_super_admin(email)` from the SQL editor.
 
-## 6. Offline-first architecture (design; implemented in Phase 5)
+## 6. Offline-first architecture (implemented in Phase 5)
 
-The mobile app will treat the local SQLite database as the **source of truth for the technician's in-progress work** and Supabase as the system of record.
+The phone's SQLite database holds the technician's work; Supabase is the system of record. Code: `apps/mobile/src/offline/`.
 
-**Local store (Expo SQLite)** — mirrors the server shapes with extra sync columns:
+**Download** — one RPC, `mobile_sync_bundle()` (security invoker, so RLS decides the scope): the technician's sites (from `site_overview`), open schedules, the templates they need (sections, questions, readings), their open visits with answers, readings and photo records, the settings the phone uses (`geofence`, `pm_submission`, `dc_thresholds`) and the active consistency rules.
 
-| Local table | Purpose |
+**Local store** (`store.ts`, schema in `db.ts`, versioned with `pragma user_version`):
+
+| Table | Holds |
 |---|---|
-| `sites`, `site_assignments`, `pm_schedules` | Downloaded for the technician's scope |
-| `pm_templates`, `pm_sections`, `pm_reading_fields`, `pm_checklist_items` | Active template version (keyed by template id + version) |
-| `pm_visits`, `pm_responses`, `pm_readings` | Work captured on the device |
-| `photos` | Local file URI, compressed/thumbnail URIs, metadata, upload state |
-| `failures`, `corrective_actions` | Created on site |
-| `outbox` | Ordered mutation queue: `(id, entity, entity_id, op, payload, attempts, last_error, created_at)` |
-| `sync_meta` | Per-table high-water marks (`updated_at`) for incremental pull |
+| `documents` | Downloaded sites, schedules, templates, settings, rules, owner and last-sync time |
+| `visits`, `responses`, `readings` | The technician's PM work |
+| `photos` | Photo metadata plus the file and thumbnail on the phone |
+| `outbox` | Changes to send: `key` (e.g. `response:<visit>:<item>`), kind, payload, state `PENDING / SYNCING / ERROR`, `version`, attempts, last error, next attempt |
 
-Every locally-created row gets a UUID generated on the device, and a `sync_state`: `LOCAL → PENDING_SYNC → SYNCING → SYNCED | SYNC_ERROR`.
+A row has unsent changes exactly when an outbox operation with its key exists — there is no separate flag that could disagree. Editing the same thing again **coalesces** into the same operation (payload replaced or merged, `version` bumped). Submitting is queued as a new operation *after* everything already queued, so the server always sees the complete checklist before checking it.
 
-**Push** (outbox, FIFO, parents before children): upserts with `on conflict (id)` for visits and `on conflict (visit_id, checklist_item_id | reading_field_id)` for responses/readings, so retries are idempotent (verified by DB tests). `client_updated_at` supports last-writer-wins on the technician's own draft; the server rejects edits after submission (guard trigger), and the app surfaces that as a `SYNC_ERROR` with the server message instead of dropping data.
+**Send** (`sync.ts`): operations go in the order they were made. Each is marked `SYNCING`, sent, and removed only if its `version` did not change meanwhile (an edit made during sending is sent next, never lost). Every call is idempotent (device-generated ids, upserts, "already exists" treated as done, a resent submit accepted if the PM is already submitted).
+- *Network problem* (no connection, timeout, 5xx, 429, expired session): the run stops and the operation waits 5 s, 10 s, 20 s … up to 10 min.
+- *Server refusal* (RLS, validation, GPS block, incomplete checklist): the operation is kept as `ERROR` with the server's message and is not retried automatically; that visit's later changes wait behind it, other visits continue. The technician can **Retry**, **Withdraw submission and keep editing**, or **Discard unsent changes** (confirmed) on the Sync status screen.
 
-**Photos**: captured → compressed (`expo-image-manipulator`) + thumbnail → saved in the app's document directory → metadata row inserted locally → queued. Upload uses `upsert` to `pm-photos/<site_id>/<visit_id>/<photo_id>.jpg`, then the `pm_photos` row is upserted. Failed uploads stay queued with a visible message ("Photo upload failed. It will retry when Internet is available.").
+**Download after send**: server data replaces the local copy except anything with an unsent change. Visits that left the technician's list (approved, reassigned) are removed with their photo files, unless they have unsent work.
 
-**Pull**: incremental by `updated_at` per table; server rows never overwrite local rows that are `PENDING_SYNC`.
+**When it syncs**: after sign-in, when the app returns to the foreground, when the network comes back (`expo-network`, skipping the back-off), 3 s after edits, every 5 minutes, and on pull-to-refresh / **Sync now**.
 
-**Triggers for sync**: app foreground, connectivity regained (`expo-network`), manual "Sync now", and after each PM submission. Nothing is deleted locally until the server acknowledges it.
+**Accounts**: the local copy belongs to one user. Another account on the same phone never sends the first account's unsent work; signing out clears the phone's copy unless work is unsent (the technician is warned before signing out). The profile is cached encrypted so the app opens offline.
 
-**Session**: the Supabase session is persisted with AES-256-GCM (key in SecureStore, ciphertext in SQLite kv-store) — already implemented in Phase 1 — so a technician stays signed in without connectivity.
+**Photos**: camera → resized to at most 1600 px (JPEG 0.7) plus a 320 px thumbnail → kept in the app's document folder → queued. Upload: file, thumbnail, then the `pm_photos` row (the database refuses the row until the file exists in storage). Path: `pm-photos/<site>/<visit>/<photo>.jpg`.
 
-**GPS** (Phase 5): captured at PM start (lat/lng/accuracy/timestamp), distance to site computed with haversine, compared to the site or default radius from `system_settings.geofence`; mode WARN / REQUIRE_REASON / BLOCK; result stored on the visit (`gps_status`, `gps_distance_m`, `gps_radius_m`, `geofence_mode`, `outside_radius_reason`).
+**GPS** at PM start: position (fresh fix with a 20 s limit, else a fix under 2 minutes old) compared with the site's coordinates and radius (site override or the default) using the configured mode. **WARN** records it, **REQUIRE_REASON** asks for a reason, **BLOCK** stops the start. The server repeats the calculation on arrival (`check_visit_gps`) and its values are the ones stored; a site without coordinates is never blocked. GPS evidence cannot be changed after the start (only a Super Admin can correct it).
+
+**Session**: the Supabase session is persisted with AES-256-GCM (key in SecureStore, ciphertext in SQLite kv-store), so a technician stays signed in without connectivity.
 
 ## 7. Phases
 
@@ -133,7 +136,7 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
 | 2 | Admin UI: regions, clusters, counties, sites, users (invite, role, scope), technicians, supervisors, assignments | **Done** |
 | 3 | PM scheduling, PM template management UI, PM visit engine (completion %, failure count, submission rules), PM review | **Done** |
 | 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | **Done** (except the Tienii demo visit — needs the report values) |
-| 5 | Photos, GPS/geofence, offline SQLite store, outbox sync | Planned |
+| 5 | Photos, GPS/geofence, offline SQLite store, outbox sync, Settings | **Done** |
 | 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | Planned |
 | 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | Planned |
 | 8 | PDF reports, CSV/Excel export, audit log UI | Planned |
@@ -188,11 +191,30 @@ Every locally-created row gets a UUID generated on the device, and a `sync_state
 - Web: section summaries on the PM review page (generator services performed; DC calculated kW, modules, phase-current table and total; battery, solar and earthing flags; consistency warnings), and a "Latest readings" card on the site page (submitted/approved PM only).
 - Mobile: live DC kW (V × A ÷ 1000) and phase total while entering the DC section, solar panels operational/installed, and consistency warnings as soon as values contradict.
 
+### Phase 5 — delivered
+
+- Database (migration `…1200_gps_photos_offline.sql`):
+  - **GPS check** at PM start (`check_visit_gps`): distance (haversine, `private.distance_m`), radius (site override or default), mode and status are computed by the server; WARN / REQUIRE_REASON / BLOCK enforced; sites without coordinates never blocked. GPS evidence locked after start (`protect_visit_gps`).
+  - **Photo integrity**: a `pm_photos` row is refused until its file is in storage.
+  - **Offline download** RPC `mobile_sync_bundle()`.
+  - **Settings validation** in the database (geofence radius/mode, DC thresholds, photo enforcement, notification settings) and **consistency-rule checks** (both values must be recorded values on a template, different, with a message); view `pm_value_keys` lists the values rules can use.
+- Mobile: offline store and sync engine (section 6), GPS check-in on **Start PM** (reason prompt for REQUIRE_REASON, clear message for BLOCK), camera capture with compression and thumbnails on every checklist item (remove before upload; uploaded photos are kept as evidence), per-answer status (Saved on phone / Sent / Refused by server), sync bar on the main screens, **Sync status** screen, Home / Sites / site detail / PM list / checklist all read from the phone, offline profile cache, sign-out warning with unsent work, GPS check-in shown on the visit, DC high-load flag.
+- Web: **Admin → Settings** (GPS geofence radius and mode, photo enforcement, DC high-load thresholds, consistency rules add/edit/deactivate; all audited), PM review page shows the **GPS check-in** (position, accuracy, distance, radius, mode, technician's reason) and **photo thumbnails** per item/section via short-lived signed URLs (shows "Not available" if a file cannot be signed), and the **DC high-load** flag when thresholds are configured.
+- Tests: store and sync engine on a real SQL engine (node:sqlite) with a simulated server — ordering, coalescing, edits during sending, back-off, refusals holding one visit only, withdraw/discard, download never overwriting unsent work, account switching; error classification; and an **end-to-end test** of the phone's real sync code through PostgREST (own fixtures, commits real rows then removes them) that completes a full PM offline, sends it and gets it accepted, including a photo.
+
+### Known limitations after Phase 5
+
+- **Not run on a device in this environment**: the app bundles for Android and all sync logic is tested, but camera, GPS and background/foreground behaviour need a device or emulator run (Phase 9 device testing).
+- **Storage** is simulated in the end-to-end test and browser checks (the Supabase Storage server cannot run here); upload and signed-URL calls use the standard supabase-js Storage API.
+- Photos are uploaded as one request each (no resumable upload); a very slow connection retries the whole photo.
+- Corrective actions (Actions tab) and the Home "open actions" count are still online-only; they move into the offline copy with the corrective-action workflow in Phase 6.
+- The `notifications` setting is validated but not editable in Settings yet: it has no effect until notifications ship in Phase 6.
+
 ### Known limitations after Phase 4
 
 - **Tienii (1301) demo visit not seeded**: the reference report's recorded readings are needed; they were not provided with the PDF, so nothing is invented.
 - "Voltage from each battery" remains a YES/NO/N/A question with the voltages in its comment, as in the reference checklist; a per-battery table can be added as template configuration later if IPT PowerTech wants it.
-- Consistency rules have no admin screen yet (SQL / Supabase table editor); it is added with the Settings screens in Phase 5.
+- ~~Consistency rules have no admin screen yet~~ — added in Phase 5 (Admin → Settings).
 
 ### Known limitations after Phase 3
 

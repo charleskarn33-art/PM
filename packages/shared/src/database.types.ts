@@ -2693,6 +2693,15 @@ export type Database = {
         };
         Relationships: [];
       };
+      pm_value_keys: {
+        Row: {
+          analytics_key: string | null;
+          label: string | null;
+          unit: string | null;
+          source: string | null;
+        };
+        Relationships: [];
+      };
       pm_visit_overview: {
         Row: {
           id: string | null;

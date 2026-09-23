@@ -1,5 +1,6 @@
 import {
   type ChecklistState,
+  type DcThresholds,
   type ConsistencyRule,
   visitIssues,
   visitProgress,
@@ -31,6 +32,7 @@ export interface PmVisitModel {
   photos: LocalPhoto[];
   photoCounts: Record<string, number>;
   enforcePhotos: boolean;
+  dcThresholds: DcThresholds | null;
   progress: VisitProgress;
   issues: VisitIssue[];
   editable: boolean;
@@ -61,6 +63,7 @@ interface Loaded {
   pendingKeys: Set<string>;
   syncErrors: OutboxOp[];
   enforcePhotos: boolean;
+  dcThresholds: DcThresholds | null;
   rules: ConsistencyRule[];
 }
 
@@ -114,6 +117,7 @@ export function usePmVisit(visitId: string): PmVisitModel {
           pendingKeys: vd.pendingKeys,
           syncErrors: vd.errors,
           enforcePhotos: settings.pm_submission?.enforce_photo_requirements ?? true,
+          dcThresholds: settings.dc_thresholds ?? null,
           rules,
         };
         // A newer edit was made while reading: a fresh read follows it, so skip this one.
@@ -284,6 +288,7 @@ export function usePmVisit(visitId: string): PmVisitModel {
     photos: data?.photos ?? [],
     photoCounts,
     enforcePhotos: data?.enforcePhotos ?? true,
+    dcThresholds: data?.dcThresholds ?? null,
     progress,
     issues,
     editable,

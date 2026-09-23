@@ -121,7 +121,8 @@ describe('mobile_sync_bundle', () => {
       expect(b.templates[0].sections[1].fields).toHaveLength(6);
       expect(b.visits.map((v: { id: string }) => v.id)).toEqual([visitId]);
       expect(b.visits[0].responses).toHaveLength(1);
-      expect(Object.keys(b.settings).sort()).toEqual(['geofence', 'pm_submission']);
+      expect(Object.keys(b.settings).sort()).toEqual(['dc_thresholds', 'geofence', 'pm_submission']);
+      expect(b.sites[0]).toMatchObject({ region_name: expect.any(String), geofence_radius_m: null }); // overview columns for offline display
       expect(b.consistency_rules).toHaveLength(3);
 
       await actAs(c, ids.techB);
@@ -131,6 +132,53 @@ describe('mobile_sync_bundle', () => {
 
       await actAs(c, 'anon');
       expect((await tryQuery(c, `select public.mobile_sync_bundle()`)).error?.code).toBe('42501');
+    });
+  });
+});
+
+describe('settings administration', () => {
+  it('validates setting values in the database', async () => {
+    await inTx(async (c) => {
+      await actAs(c, ids.admin);
+      const set = (key: string, value: unknown) =>
+        tryQuery(c, `update public.system_settings set value = $2 where key = $1`, [key, JSON.stringify(value)]);
+      expect((await set('geofence', { radius_m: 250, mode: 'BLOCK' })).error).toBeUndefined();
+      expect((await set('geofence', { radius_m: 0, mode: 'BLOCK' })).error?.message).toMatch(/radius/);
+      expect((await set('geofence', { radius_m: 10.5, mode: 'WARN' })).error?.message).toMatch(/whole number/);
+      expect((await set('geofence', { radius_m: 100, mode: 'SOMETIMES' })).error?.message).toMatch(/mode/);
+      expect((await set('dc_thresholds', { high_load_kw: 3.5, high_load_current_a: null })).error).toBeUndefined();
+      expect((await set('dc_thresholds', { high_load_kw: -1, high_load_current_a: null })).error?.message).toMatch(/greater than 0/);
+      expect((await set('dc_thresholds', { high_load_kw: null })).error?.message).toMatch(/missing/);
+      expect((await set('pm_submission', { enforce_photo_requirements: 'yes' })).error?.message).toMatch(/true or false/);
+    });
+  });
+
+  it('only a Super Admin may change settings or consistency rules', async () => {
+    await inTx(async (c) => {
+      for (const who of [ids.managerA, ids.supervisorA, ids.techA, ids.viewer]) {
+        await actAs(c, who);
+        const upd = await tryQuery(c, `update public.system_settings set value = '{"radius_m": 5, "mode": "BLOCK"}' where key = 'geofence' returning key`);
+        expect(upd.error ?? upd.rows.length).toBe(0);
+        const ins = await tryQuery(c, `insert into public.pm_consistency_rules (lhs_key, operator, rhs_key, message)
+                                       values ('solar.panels_operational', '<', 'solar.panels_installed', 'x')`);
+        expect(ins.error?.code).toBe('42501');
+      }
+    });
+  });
+
+  it('consistency rules must compare two known recorded values', async () => {
+    await inTx(async (c) => {
+      await actAs(c, ids.admin);
+      const add = (lhs: string, rhs: string, message = 'm') =>
+        tryQuery(c, `insert into public.pm_consistency_rules (lhs_key, operator, rhs_key, message) values ($1, '<', $2, $3)`, [lhs, rhs, message]);
+      expect((await add('solar.panels_operational', 'solar.panels_installed', 'Fewer operational than installed')).error).toBeUndefined();
+      expect((await add('no.such_key', 'solar.panels_installed')).error?.message).toMatch(/Unknown value key/);
+      expect((await add('solar.panels_installed', 'solar.panels_installed')).error?.message).toMatch(/two different/);
+      expect((await add('dc.dc_modules_installed', 'solar.panels_installed', '   ')).error?.message).toMatch(/message/);
+
+      const keys = await c.query(`select analytics_key, source from public.pm_value_keys order by 1`);
+      expect(keys.rows.map((r) => r.analytics_key)).toEqual(expect.arrayContaining(['dc.dc_modules_installed', 'solar.panels_installed']));
+      expect(new Set(keys.rows.map((r) => r.analytics_key)).size).toBe(keys.rows.length);
     });
   });
 });

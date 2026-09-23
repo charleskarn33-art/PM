@@ -1,4 +1,4 @@
-import { dcPowerKw, totalPhaseCurrentA, type Enums } from '@ipt/shared';
+import { dcHighLoad, dcPowerKw, totalPhaseCurrentA, type Enums } from '@ipt/shared';
 import { StyleSheet, Text, View } from 'react-native';
 import { Card } from '@/components/ui';
 import { colors, spacing } from '@/theme';
@@ -20,13 +20,29 @@ const fmt = (v: number | null, unit: string, digits = 2) => (v == null ? '—' :
 export function SectionLiveSummary({ category, pm }: { category: Enums<'pm_category'>; pm: PmVisitModel }) {
   const key = (k: string) => keyedValue(k, pm.fields, pm.items, pm.readings, pm.responses);
   if (category === 'DC_SYSTEM') {
-    const kw = dcPowerKw(key('dc.rectifier_voltage_v'), key('dc.load_current_a'));
+    const loadA = key('dc.load_current_a');
+    const kw = dcPowerKw(key('dc.rectifier_voltage_v'), loadA);
     const phases = phaseCurrents(pm.items, pm.responses);
+    const high = dcHighLoad(kw, loadA, pm.dcThresholds);
     return (
-      <Card style={styles.card}>
-        <Stat label="DC power (V × A ÷ 1000)" value={fmt(kw, 'kW', 3)} />
-        <Stat label={`Phase total (${phases.length} phase${phases.length === 1 ? '' : 's'})`} value={fmt(totalPhaseCurrentA(phases.map((p) => p.amps)), 'A')} />
-      </Card>
+      <View style={{ gap: spacing.sm }}>
+        <Card style={styles.card}>
+          <Stat label="DC power (V × A ÷ 1000)" value={fmt(kw, 'kW', 3)} warn={high.kw} />
+          <Stat label={`Phase total (${phases.length} phase${phases.length === 1 ? '' : 's'})`} value={fmt(totalPhaseCurrentA(phases.map((p) => p.amps)), 'A')} />
+        </Card>
+        {high.kw || high.current ? (
+          <Text style={styles.warn} accessibilityRole="alert">
+            High DC load:{' '}
+            {[
+              high.kw ? `power above the configured ${pm.dcThresholds?.high_load_kw} kW` : null,
+              high.current ? `load current above the configured ${pm.dcThresholds?.high_load_current_a} A` : null,
+            ]
+              .filter(Boolean)
+              .join('; ')}
+            .
+          </Text>
+        ) : null}
+      </View>
     );
   }
   if (category === 'SOLAR') {
@@ -49,5 +65,6 @@ const styles = StyleSheet.create({
   card: { flexDirection: 'row', gap: spacing.lg, backgroundColor: '#eef1f6' },
   stat: { flex: 1 },
   label: { fontSize: 13, color: colors.textMuted, fontWeight: '600' },
+  warn: { fontSize: 15, fontWeight: '700', color: '#b45309', backgroundColor: '#fef3c7', padding: spacing.md, borderRadius: 8 },
   value: { fontSize: 22, fontWeight: '800', color: colors.text, marginTop: 2 },
 });

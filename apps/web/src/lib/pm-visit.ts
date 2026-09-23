@@ -1,5 +1,5 @@
 import 'server-only';
-import type { ChecklistState, Database, Tables, VisitIssue } from '@ipt/shared';
+import type { ChecklistState, Database, DcThresholds, Tables, VisitIssue } from '@ipt/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 type Client = SupabaseClient<Database>;
@@ -43,9 +43,16 @@ export interface VisitDetail {
   responses: Tables<'pm_responses'>[];
   readings: Tables<'pm_readings'>[];
   photoCounts: Record<string, number>;
+  photos: VisitPhoto[];
+  dcThresholds: DcThresholds | null;
   issues: VisitIssue[];
   state: ChecklistState;
 }
+
+export type VisitPhoto = Pick<
+  Tables<'pm_photos'>,
+  'id' | 'checklist_item_id' | 'section_id' | 'file_path' | 'thumbnail_path' | 'taken_at' | 'caption'
+>;
 
 function must<T>(label: string, r: { data: T | null; error: { message: string } | null }): T {
   if (r.error) throw new Error(`Unable to load ${label}: ${r.error.message}`);
@@ -67,18 +74,24 @@ export async function loadVisitDetail(supabase: Client, id: string): Promise<Vis
     await supabase.from('pm_sections').select('*').eq('template_id', visitRow.template_id).order('sort_order'),
   );
   const sectionIds = sections.map((s) => s.id);
-  const [items, fields, responses, readings, photos, issues, rules, analytics] = await Promise.all([
+  const [items, fields, responses, readings, photos, issues, rules, analytics, dcSetting] = await Promise.all([
     supabase.from('pm_checklist_items').select('*').in('section_id', sectionIds).order('sort_order'),
     supabase.from('pm_reading_fields').select('*').in('section_id', sectionIds).order('sort_order'),
     supabase.from('pm_responses').select('*').eq('visit_id', id),
     supabase.from('pm_readings').select('*').eq('visit_id', id),
-    supabase.from('pm_photos').select('checklist_item_id').eq('visit_id', id),
+    supabase
+      .from('pm_photos')
+      .select('id, checklist_item_id, section_id, file_path, thumbnail_path, taken_at, caption')
+      .eq('visit_id', id)
+      .order('taken_at'),
     supabase.rpc('pm_visit_issues', { p_visit_id: id }),
     supabase.from('pm_consistency_rules').select('id, lhs_key, operator, rhs_key, message, is_active').eq('is_active', true),
     loadVisitAnalytics(supabase, id),
+    supabase.from('system_settings').select('value').eq('key', 'dc_thresholds').maybeSingle(),
   ]);
+  const photoRows = must('photos', photos);
   const photoCounts: Record<string, number> = {};
-  for (const p of must('photos', photos)) {
+  for (const p of photoRows) {
     if (p.checklist_item_id) photoCounts[p.checklist_item_id] = (photoCounts[p.checklist_item_id] ?? 0) + 1;
   }
   const consistencyRules = must('consistency rules', rules);
@@ -92,6 +105,8 @@ export async function loadVisitDetail(supabase: Client, id: string): Promise<Vis
     responses: must('responses', responses),
     readings: must('readings', readings),
     photoCounts,
+    photos: photoRows,
+    dcThresholds: (must('DC thresholds', dcSetting)?.value as unknown as DcThresholds | undefined) ?? null,
     issues: must('issues', issues).map((i) => ({
       sectionCode: i.section_code,
       refType: i.ref_type as 'item' | 'reading',
@@ -113,4 +128,31 @@ export async function loadVisitDetail(supabase: Client, id: string): Promise<Vis
       consistencyRules,
     },
   };
+}
+
+/**
+ * Short-lived signed URLs for photo thumbnails and full images (private
+ * bucket). Returns an empty map when Storage is unreachable so the page still
+ * renders; photos then show as "not available".
+ */
+export async function signPhotoUrls(
+  supabase: Client,
+  photos: VisitPhoto[],
+  expiresInSeconds = 3600,
+): Promise<Map<string, { thumb: string | null; full: string | null }>> {
+  const out = new Map<string, { thumb: string | null; full: string | null }>();
+  if (photos.length === 0) return out;
+  const paths = [...new Set(photos.flatMap((p) => [p.file_path, p.thumbnail_path].filter((x): x is string => !!x)))];
+  try {
+    const { data, error } = await supabase.storage.from('pm-photos').createSignedUrls(paths, expiresInSeconds);
+    if (error || !data) return out;
+    const byPath = new Map(data.filter((d) => d.signedUrl && !d.error).map((d) => [d.path, d.signedUrl]));
+    for (const p of photos) {
+      const full = byPath.get(p.file_path) ?? null;
+      out.set(p.id, { full, thumb: (p.thumbnail_path ? byPath.get(p.thumbnail_path) : null) ?? full });
+    }
+  } catch {
+    // Storage unavailable: the page shows photo placeholders.
+  }
+  return out;
 }

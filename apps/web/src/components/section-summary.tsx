@@ -1,4 +1,4 @@
-import { dcPowerKw, totalPhaseCurrentA, type Enums } from '@ipt/shared';
+import { dcHighLoad, dcPowerKw, totalPhaseCurrentA, type DcThresholds, type Enums } from '@ipt/shared';
 import type { VisitAnalytics } from '@/lib/pm-visit';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +28,16 @@ const num = (v: number | null | undefined, unit = '', digits = 2) =>
  * Section-specific summary built from the analytics tables the database
  * projects from the technician's answers. Calculated values are labelled.
  */
-export function SectionSummary({ category, analytics }: { category: Enums<'pm_category'>; analytics: VisitAnalytics }) {
+export function SectionSummary({
+  category,
+  analytics,
+  dcThresholds,
+}: {
+  category: Enums<'pm_category'>;
+  analytics: VisitAnalytics;
+  /** Administrator-configured high-load thresholds; nothing is flagged when not configured. */
+  dcThresholds?: DcThresholds | null;
+}) {
   switch (category) {
     case 'GENERATOR': {
       const g = analytics.generator;
@@ -47,10 +56,23 @@ export function SectionSummary({ category, analytics }: { category: Enums<'pm_ca
       if (!d && analytics.phases.length === 0) return null;
       const kw = d?.dc_power_kw ?? dcPowerKw(d?.rectifier_voltage_v, d?.load_current_a);
       const phaseTotal = totalPhaseCurrentA(analytics.phases.map((p) => p.amp_value));
+      const high = dcHighLoad(kw, d?.load_current_a, dcThresholds);
       return (
         <div className="space-y-3">
+          {high.kw || high.current ? (
+            <p role="status" className="rounded-md bg-warning-soft px-3 py-2 text-sm font-medium text-warning">
+              High DC load:{' '}
+              {[
+                high.kw ? `power above the configured ${dcThresholds?.high_load_kw} kW` : null,
+                high.current ? `load current above the configured ${dcThresholds?.high_load_current_a} A` : null,
+              ]
+                .filter(Boolean)
+                .join('; ')}
+              .
+            </p>
+          ) : null}
           <div className="grid gap-2 sm:grid-cols-4">
-            <Stat label="DC power (calculated V × A / 1000)" value={num(kw, 'kW', 3)} />
+            <Stat label="DC power (calculated V × A / 1000)" value={num(kw, 'kW', 3)} tone={high.kw ? 'warning' : undefined} />
             <Stat
               label="Modules operational / installed"
               value={d?.dc_modules_installed != null ? `${d.dc_modules_operational ?? '—'} / ${d.dc_modules_installed}` : '—'}

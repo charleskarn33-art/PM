@@ -1,4 +1,4 @@
-import type { ConsistencyRule, Enums, Tables } from '@ipt/shared';
+import type { ConsistencyRule, DcThresholds, Enums, Tables } from '@ipt/shared';
 
 /** Site as downloaded (the site_overview view: names of region, county, supervisor, next PM). */
 export type Site = Tables<'site_overview'> & { id: string; site_code: string; site_name: string };
@@ -25,6 +25,7 @@ export interface PmSubmissionSetting {
 export interface BundleSettings {
   geofence?: GeofenceSetting;
   pm_submission?: PmSubmissionSetting;
+  dc_thresholds?: DcThresholds;
 }
 
 /** Shape returned by public.mobile_sync_bundle(). */

@@ -1,5 +1,7 @@
 import {
   can,
+  formatDistance,
+  humanizeStatus,
   ISSUE_LABELS,
   isFailure,
   PM_CATEGORY_LABELS,
@@ -13,6 +15,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
+import { PhotoThumbs } from '@/components/photo-thumbs';
 import { SectionSummary } from '@/components/section-summary';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert } from '@/components/ui/alert';
@@ -20,7 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { requireRole } from '@/lib/auth';
-import { loadVisitDetail } from '@/lib/pm-visit';
+import { loadVisitDetail, signPhotoUrls } from '@/lib/pm-visit';
 import { createClient } from '@/lib/supabase/server';
 import { cn } from '@/lib/utils';
 import { ReviewForm } from './review-form';
@@ -52,7 +55,9 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
   const supabase = await createClient();
   const detail = await loadVisitDetail(supabase, id);
   if (!detail) notFound();
-  const { visit, raw, sections, items, readingFields, responses, readings, photoCounts, issues, state, analytics } = detail;
+  const { visit, raw, sections, items, readingFields, responses, readings, photoCounts, photos, issues, state, analytics, dcThresholds } = detail;
+  const photoUrls = await signPhotoUrls(supabase, photos);
+  const photosFor = (itemId: string) => photos.filter((p) => p.checklist_item_id === itemId);
 
   const progress = visitProgress(state);
   const responseBy = new Map(responses.map((r) => [r.checklist_item_id, r]));
@@ -86,7 +91,7 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
           ['Failures', String(visit.failure_count)],
           ['Started', when(visit.started_at)],
           ['Submitted', when(visit.submitted_at)],
-          ['GPS', raw.gps_latitude != null ? `${raw.gps_latitude.toFixed(5)}, ${raw.gps_longitude?.toFixed(5)} (±${raw.gps_accuracy_m ?? '?'} m)` : 'Not captured'],
+          ['Photos', String(photos.length)],
         ].map(([label, value]) => (
           <Card key={label} className="p-4">
             <p className="text-xs text-muted-foreground">{label}</p>
@@ -94,6 +99,8 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
           </Card>
         ))}
       </div>
+
+      <GpsCheckIn visit={raw} />
 
       {visit.reviewed_at && (visit.status === 'APPROVED' || visit.status === 'REJECTED') ? (
         <Alert tone={visit.status === 'REJECTED' ? 'danger' : 'success'}>
@@ -173,7 +180,12 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
                       })}
                     </dl>
                   ) : null}
-                  <SectionSummary category={section.category} analytics={analytics} />
+                  <SectionSummary category={section.category} analytics={analytics} dcThresholds={dcThresholds} />
+                  <PhotoThumbs
+                    photos={photos.filter((p) => !p.checklist_item_id && p.section_id === section.id)}
+                    urls={photoUrls}
+                    label={`${section.name} photos`}
+                  />
                   <ul className="divide-y">
                     {sectionItems.map((item) => {
                       const r = responseBy.get(item.id);
@@ -194,6 +206,11 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
                               </p>
                             ) : null}
                             {itemIssues ? <p className="mt-1 text-xs font-medium text-warning">{itemIssues.join(' · ')}</p> : null}
+                            {photoCounts[item.id] ? (
+                              <div className="mt-2">
+                                <PhotoThumbs photos={photosFor(item.id)} urls={photoUrls} label={`Photos for ${item.prompt}`} />
+                              </div>
+                            ) : null}
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
                             {photoCounts[item.id] ? (
@@ -237,5 +254,52 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
         Template v{visit.template_version}. Sections: {sections.map((s) => PM_CATEGORY_LABELS[s.category]).join(' · ')}.
       </p>
     </div>
+  );
+}
+
+/** GPS evidence recorded when the PM was started (computed by the server). */
+function GpsCheckIn({ visit }: { visit: Tables<'pm_visits'> }) {
+  const status = visit.gps_status;
+  if (!status) return null;
+  const tone = status === 'WITHIN_RADIUS' ? 'success' : status === 'SITE_HAS_NO_COORDINATES' ? 'info' : 'warning';
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
+        <CardTitle>GPS check-in</CardTitle>
+        <StatusBadge status={status} tone={tone} />
+      </CardHeader>
+      <CardContent>
+        <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <dt className="text-xs text-muted-foreground">Position</dt>
+            <dd className="font-medium tabular-nums">
+              {visit.gps_latitude != null && visit.gps_longitude != null
+                ? `${visit.gps_latitude.toFixed(5)}, ${visit.gps_longitude.toFixed(5)}`
+                : 'Not captured'}
+              {visit.gps_accuracy_m != null ? <span className="text-muted-foreground"> (±{Math.round(visit.gps_accuracy_m)} m)</span> : null}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Distance from site</dt>
+            <dd className="font-medium tabular-nums">{formatDistance(visit.gps_distance_m)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Allowed radius · mode</dt>
+            <dd className="font-medium">
+              {visit.gps_radius_m != null ? `${visit.gps_radius_m} m` : '—'} · {visit.geofence_mode ? humanizeStatus(visit.geofence_mode) : '—'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-muted-foreground">Captured</dt>
+            <dd className="font-medium">{when(visit.gps_captured_at)}</dd>
+          </div>
+        </dl>
+        {visit.outside_radius_reason ? (
+          <Alert tone="warning" className="mt-3">
+            Technician&apos;s reason for starting outside the site area: {visit.outside_radius_reason}
+          </Alert>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

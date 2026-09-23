@@ -167,7 +167,8 @@ as $$
         'photos', coalesce((select jsonb_agg(to_jsonb(p)) from public.pm_photos p where p.visit_id = v.id), '[]'::jsonb)))
         from open_visits v), '[]'::jsonb),
     'settings', coalesce((
-      select jsonb_object_agg(key, value) from public.system_settings where key in ('geofence', 'pm_submission')), '{}'::jsonb),
+      select jsonb_object_agg(key, value) from public.system_settings
+       where key in ('geofence', 'pm_submission', 'dc_thresholds')), '{}'::jsonb),
     'consistency_rules', coalesce((
       select jsonb_agg(to_jsonb(r)) from public.pm_consistency_rules r where r.is_active), '[]'::jsonb)
   )
@@ -175,3 +176,115 @@ $$;
 
 revoke execute on function public.mobile_sync_bundle() from public, anon;
 grant execute on function public.mobile_sync_bundle() to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- Settings are edited by administrators in the web portal. The database
+-- validates their shape so a bad value can never reach the apps. Only
+-- structural rules are enforced (types, positive numbers, known modes); no
+-- engineering limits are imposed.
+-- -----------------------------------------------------------------------------
+create or replace function private.validate_system_setting()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v jsonb := new.value;
+  k text;
+begin
+  if jsonb_typeof(v) <> 'object' then
+    raise exception 'Setting % must be a JSON object', new.key using errcode = '22023';
+  end if;
+  case new.key
+    when 'geofence' then
+      if jsonb_typeof(v -> 'radius_m') <> 'number' or (v ->> 'radius_m')::numeric <= 0
+         or (v ->> 'radius_m')::numeric <> trunc((v ->> 'radius_m')::numeric) then
+        raise exception 'Geofence radius must be a whole number of metres greater than 0' using errcode = '22023';
+      end if;
+      if coalesce(v ->> 'mode', '') not in (select unnest(enum_range(null::public.geofence_mode))::text) then
+        raise exception 'Geofence mode must be WARN, REQUIRE_REASON or BLOCK' using errcode = '22023';
+      end if;
+    when 'dc_thresholds' then
+      foreach k in array array['high_load_kw', 'high_load_current_a'] loop
+        if not (v ? k) then
+          raise exception 'DC threshold % is missing (use null when not configured)', k using errcode = '22023';
+        end if;
+        if jsonb_typeof(v -> k) <> 'null'
+           and (jsonb_typeof(v -> k) <> 'number' or (v ->> k)::numeric <= 0) then
+          raise exception 'DC threshold % must be empty or a number greater than 0', k using errcode = '22023';
+        end if;
+      end loop;
+    when 'pm_submission' then
+      if jsonb_typeof(v -> 'enforce_photo_requirements') <> 'boolean' then
+        raise exception 'enforce_photo_requirements must be true or false' using errcode = '22023';
+      end if;
+    when 'notifications' then
+      if jsonb_typeof(v -> 'pm_due_reminder_days') not in ('null', 'number')
+         or (jsonb_typeof(v -> 'pm_due_reminder_days') = 'number' and (v ->> 'pm_due_reminder_days')::numeric < 0) then
+        raise exception 'pm_due_reminder_days must be empty or a number of days' using errcode = '22023';
+      end if;
+      if jsonb_typeof(v -> 'corrective_action_overdue_enabled') <> 'boolean' then
+        raise exception 'corrective_action_overdue_enabled must be true or false' using errcode = '22023';
+      end if;
+    else
+      null; -- other keys are free-form
+  end case;
+  return new;
+end;
+$$;
+
+create trigger validate_system_setting
+  before insert or update on public.system_settings
+  for each row execute function private.validate_system_setting();
+
+-- Consistency rules compare two values recorded in a PM. Both keys must be
+-- analytics keys defined on a checklist item or reading field.
+create or replace function private.check_consistency_rule()
+returns trigger
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+  k text;
+begin
+  if new.lhs_key = new.rhs_key then
+    raise exception 'A consistency rule must compare two different values' using errcode = '23514';
+  end if;
+  foreach k in array array[new.lhs_key, new.rhs_key] loop
+    if not exists (select 1 from public.pm_checklist_items where analytics_key = k)
+       and not exists (select 1 from public.pm_reading_fields where analytics_key = k) then
+      raise exception 'Unknown value key "%": it is not defined on any checklist item or reading', k using errcode = '23503';
+    end if;
+  end loop;
+  new.message := btrim(new.message);
+  if new.message = '' then
+    raise exception 'A consistency rule needs a message for the technician' using errcode = '23514';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger check_consistency_rule
+  before insert or update on public.pm_consistency_rules
+  for each row execute function private.check_consistency_rule();
+
+-- Analytics keys that rules may reference, with the label shown to admins.
+create or replace view public.pm_value_keys
+with (security_invoker = true) as
+select distinct on (k.analytics_key) k.analytics_key, k.label, k.unit, k.source
+  from (
+    select i.analytics_key, i.prompt as label, i.unit, 'item' as source, t.status, t.version
+      from public.pm_checklist_items i
+      join public.pm_sections s on s.id = i.section_id
+      join public.pm_templates t on t.id = s.template_id
+     where i.analytics_key is not null and i.response_type = 'NUMBER'
+    union all
+    select f.analytics_key, f.label, f.unit, 'reading', t.status, t.version
+      from public.pm_reading_fields f
+      join public.pm_sections s on s.id = f.section_id
+      join public.pm_templates t on t.id = s.template_id
+     where f.analytics_key is not null and f.value_type = 'NUMBER'
+  ) k
+ order by k.analytics_key, (k.status = 'ACTIVE') desc, k.version desc;
+
+grant select on public.pm_value_keys to authenticated;

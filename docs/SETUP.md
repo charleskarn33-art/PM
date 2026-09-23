@@ -81,7 +81,13 @@ cp apps/mobile/.env.example apps/mobile/.env   # set URL + publishable key
 pnpm dev:mobile                                # Expo dev server
 ```
 
-The app uses native modules (SecureStore, SQLite, Crypto). Use a development build (`npx expo run:android` / `run:ios` or EAS Build). Builds for distribution: EAS (`eas build`), with `EXPO_PUBLIC_*` variables set as EAS environment variables.
+The app uses native modules (SecureStore, SQLite, Crypto, Camera, Location, File System, Image Manipulator, Network). Use a development build (`npx expo run:android` / `run:ios` or EAS Build); Expo Go is not enough. Builds for distribution: EAS (`eas build`), with `EXPO_PUBLIC_*` variables set as EAS environment variables.
+
+Permissions (configured in `app.json`): camera (evidence photos) and location while the app is in use (GPS check-in at PM start). Location is never tracked in the background.
+
+**Offline use**: a technician must sign in and sync once with a connection; after that the PM list, sites and checklists work without a connection and changes are sent automatically when the connection returns. Photos are kept in the app's own storage until uploaded. Signing out with unsent work keeps that work on the phone until the same account signs in again.
+
+**Settings** (web, Super Admin → Settings): GPS geofence radius and mode (WARN / REQUIRE_REASON / BLOCK), evidence-photo enforcement, DC high-load thresholds (empty = no flag) and consistency rules. Phones pick up changes on their next sync; the server always applies the current settings.
 
 ## 4. Checks
 
@@ -94,6 +100,8 @@ pnpm test:db            # migrations + RLS + workflow tests on PostgreSQL, API t
 pnpm db:types           # regenerate packages/shared/src/database.types.ts after changing migrations
 pnpm --filter @ipt/mobile bundle:check   # Metro Android bundle
 ```
+
+`supabase/tests/src/mobile-sync.test.ts` runs the phone's real offline store and sync code against PostgREST end to end. Unlike the other API tests it commits data, so it uses its own region-C fixtures and deletes what it created. Storage uploads are simulated in that test (storage RLS still applies).
 
 The API tests start PostgREST (the server Supabase uses) against the test database and run the web and mobile query code with a signed JWT per role; every request uses `Prefer: tx=rollback`, so they change nothing. Without the binary they are skipped with a notice.
 

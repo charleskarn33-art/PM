@@ -9,7 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { loadDashboard, monthPeriod } from '@/lib/dashboard';
 import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
-import { loadVisitAnalytics, loadVisitDetail } from '@/lib/pm-visit';
+import { loadVisitAnalytics, loadVisitDetail, signPhotoUrls } from '@/lib/pm-visit';
 import { parseSiteParams, siteQuery } from '@/lib/sites';
 import { ids } from './db';
 import { apiAs, postgrestBinary } from './postgrest';
@@ -248,6 +248,46 @@ describe.skipIf(!postgrestBinary())('PostgREST API', () => {
       expect(r.data).toHaveLength(3);
       const anon = await apiAs(null).from('pm_consistency_rules').select('id');
       expect(anon.error?.code).toBe('42501');
+    });
+  });
+
+  describe('Phase 5: settings, offline download, photos', () => {
+    it('web: settings page queries resolve for a Super Admin', async () => {
+      const api = apiAs(ids.admin);
+      const [settings, rules, keys] = await Promise.all([
+        api.from('system_settings').select('key, value, updated_at').in('key', ['geofence', 'dc_thresholds', 'pm_submission']),
+        api.from('pm_consistency_rules').select('id, lhs_key, operator, rhs_key, message, is_active').order('created_at'),
+        api.from('pm_value_keys').select('analytics_key, label, unit').order('analytics_key'),
+      ]);
+      expect([settings.error, rules.error, keys.error]).toEqual([null, null, null]);
+      expect(settings.data?.map((s) => s.key).sort()).toEqual(['dc_thresholds', 'geofence', 'pm_submission']);
+      expect(keys.data?.map((k) => k.analytics_key)).toEqual(expect.arrayContaining(['dc.dc_modules_installed', 'solar.panels_installed']));
+      // The same write the settings action performs (rolled back by the test client).
+      const write = await api.from('system_settings').update({ value: { radius_m: 150, mode: 'REQUIRE_REASON' } }).eq('key', 'geofence').select('key');
+      expect(write.error).toBeNull();
+      expect(write.data).toHaveLength(1);
+      const bad = await api.from('system_settings').update({ value: { radius_m: -5, mode: 'WARN' } }).eq('key', 'geofence').select('key');
+      expect(bad.error?.message).toMatch(/radius/);
+    });
+
+    it('web: non-admins cannot change settings', async () => {
+      const r = await apiAs(ids.managerA).from('system_settings').update({ value: { radius_m: 5, mode: 'BLOCK' } }).eq('key', 'geofence').select('key');
+      expect(r.error ?? r.data?.length).toBe(0);
+    });
+
+    it('mobile: offline download RPC returns the technician’s bundle', async () => {
+      const r = await apiAs(ids.techA).rpc('mobile_sync_bundle');
+      expect(r.error).toBeNull();
+      const b = r.data as unknown as { sites: { site_code: string }[]; settings: Record<string, unknown> };
+      expect(b.sites.map((s) => s.site_code)).toEqual(['T-A1']);
+      expect(Object.keys(b.settings).sort()).toEqual(['dc_thresholds', 'geofence', 'pm_submission']);
+    });
+
+    it('web: photo URL signing degrades gracefully when Storage is unreachable', async () => {
+      const urls = await signPhotoUrls(as(ids.supervisorA), [
+        { id: 'p1', checklist_item_id: null, section_id: null, file_path: 'a/b/c.jpg', thumbnail_path: null, taken_at: new Date().toISOString(), caption: null },
+      ]);
+      expect(urls.size).toBe(0);
     });
   });
 });

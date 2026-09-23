@@ -223,19 +223,21 @@ describe('storage object policies', () => {
       await actAs(c, ids.managerA);
       const denied = await tryQuery(c, insertObject, ['pm-photos', `${ids.siteA1}/v/m.jpg`, ids.managerA]);
       expect(denied.error?.message).toMatch(/row-level security/);
-      expect((await c.query(`select name from storage.objects`)).rowCount).toBe(1);
+      const mine = `select name from storage.objects where name like '${ids.siteA1}/%'`;
+      expect((await c.query(mine)).rowCount).toBe(1);
       await actAs(c, ids.supervisorB);
-      expect((await c.query(`select name from storage.objects`)).rowCount).toBe(0);
+      expect((await c.query(mine)).rowCount).toBe(0);
     });
   });
 
   it('only super admin may delete photo evidence', async () => {
     await inTx(async (c) => {
-      await c.query(insertObject, ['pm-photos', `${ids.siteA1}/v/p.jpg`, ids.techA]);
+      const name = `${ids.siteA1}/v/p.jpg`;
+      await c.query(insertObject, ['pm-photos', name, ids.techA]);
       await actAs(c, ids.techA);
-      expect((await tryQuery(c, `delete from storage.objects`)).rowCount).toBe(0);
+      expect((await tryQuery(c, `delete from storage.objects where name = $1`, [name])).rowCount).toBe(0);
       await actAs(c, ids.admin);
-      expect((await tryQuery(c, `delete from storage.objects`)).rowCount).toBe(1);
+      expect((await tryQuery(c, `delete from storage.objects where name = $1`, [name])).rowCount).toBe(1);
     });
   });
 });

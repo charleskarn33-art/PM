@@ -69,7 +69,7 @@ export const NAVIGATION: NavSection[] = [
         capability: 'manage_organization',
       },
       { label: 'PM Templates', href: '/admin/templates', icon: 'templates', capability: 'manage_templates' },
-      { label: 'Settings', href: '/admin/settings', icon: 'settings', capability: 'manage_settings', plannedPhase: 5 },
+      { label: 'Settings', href: '/admin/settings', icon: 'settings', capability: 'manage_settings' },
       { label: 'Audit Log', href: '/admin/audit', icon: 'audit', capability: 'view_audit_log', plannedPhase: 8 },
     ],
   },

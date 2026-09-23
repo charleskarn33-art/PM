@@ -5,7 +5,7 @@
   "description": "IPT PowerTech PM System \u2014 telecom site power preventive maintenance platform",
   "packageManager": "pnpm@10.33.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "typecheck": "pnpm -r --parallel run typecheck",
