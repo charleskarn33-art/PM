@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The deploy workflow runs every check first.
+  workflow_call:
 
 permissions:
   contents: read

@@ -1,5 +1,7 @@
 # Setup and Deployment
 
+For deploying to staging and production (Supabase, Vercel, EAS, the Deploy workflow, rollback and monitoring) follow **[DEPLOYMENT.md](DEPLOYMENT.md)**. This page covers local setup and project configuration.
+
 ## Prerequisites
 
 - Node.js 22+, pnpm 10 (`corepack enable`)
@@ -93,15 +95,7 @@ Permissions (configured in `app.json`): camera (evidence photos) and location wh
 
 1. App build: run `eas init` so `app.json` has `extra.eas.projectId` (Expo push tokens need it), and configure FCM/APNs credentials with `eas credentials`.
 2. Deploy the sender: `supabase functions deploy send-push --no-verify-jwt`, then `supabase secrets set PUSH_FUNCTION_SECRET=<random string>` (and optionally `EXPO_ACCESS_TOKEN` if enhanced push security is enabled in Expo). The function uses the service role key that Supabase provides to Edge Functions; it is never shipped to an app.
-3. Call it every minute (Database → Extensions: enable `pg_cron` and `pg_net`):
-
-```sql
-select cron.schedule('ipt-send-push', '* * * * *', $$
-  select net.http_post(
-    url := 'https://<project-ref>.supabase.co/functions/v1/send-push',
-    headers := jsonb_build_object('Authorization', 'Bearer <PUSH_FUNCTION_SECRET>'))
-$$);
-```
+3. Schedule it every minute with the secret kept in Supabase Vault — see [DEPLOYMENT.md § 1.5](DEPLOYMENT.md#15-push-delivery-after-the-first-database-deploy).
 
 **Reminders** (`system_settings.notifications`): `pm_due_reminder_days` (days before the due date to remind the technician; null = off) and `corrective_action_overdue_enabled`. They are sent by `run_daily_notifications()`, scheduled daily by the migration when pg_cron is enabled; if you enable pg_cron later, schedule it yourself: `select cron.schedule('ipt-daily-notifications', '30 6 * * *', 'select public.run_daily_notifications()');`.
 

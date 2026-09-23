@@ -1,4 +1,4 @@
-const PUBLIC_PATHS = ['/login', '/forgot-password', '/auth/confirm'];
+const PUBLIC_PATHS = ['/login', '/forgot-password', '/auth/confirm', '/api/health'];
 
 export function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));

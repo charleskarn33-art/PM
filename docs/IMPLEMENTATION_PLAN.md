@@ -141,7 +141,7 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 | 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | **Done** |
 | 8 | PDF reports, CSV/Excel export, audit log UI | **Done** |
 | 9 | Test expansion (E2E), security audit, performance, device testing | **Done** (device run pending hardware — see DEVICE_TESTING.md) |
-| 10 | Production deployment (Supabase, Vercel, EAS) | Planned |
+| 10 | Production deployment (Supabase, Vercel, EAS) | **Ready to deploy** (needs the owner's accounts — see DEPLOYMENT.md) |
 
 ## Phase status
 
@@ -256,6 +256,21 @@ A row has unsent changes exactly when an outbox operation with its key exists �
   After the fixes every case is under 400 ms (median); slowest: latest readings for all 1,200 sites (0.39 s), mobile sync download (0.37 s), sites list filtered by overdue PM (0.33 s).
 - Found by the browser tests: a supervisor could not see the name of the Maintenance user they had assigned work to (migration `…1700_profile_visibility.sql`); the audit log now shows status changes as `SUBMITTED → REJECTED` and "PM" labels correctly.
 - **Device testing**: a step-by-step plan for real phones (`docs/DEVICE_TESTING.md`) — **not run** here (no device or emulator in this environment).
+
+### Phase 10 — delivered (deployment-ready; not yet deployed)
+
+- **Runbook** (`docs/DEPLOYMENT.md`): staging and production environments; one-time setup of Supabase (extensions, Auth, SMTP, URLs), GitHub environments and their secrets, Vercel, Expo/EAS and Google Play, and push delivery (secret kept in Supabase Vault); first deployment, release routine with the mobile compatibility rule, rollback per component, smoke test and monitoring.
+- **Deploy workflow** (`.github/workflows/deploy.yml`, manual per environment, validated with actionlint): runs the whole CI suite first, then `supabase db push` (migrations only — the demo seed is never pushed), deploys the `send-push` Edge Function, verifies the database, builds and deploys the web app on Vercel with a health check, and optionally starts an EAS Android build.
+- **Post-deploy verification** (`pnpm verify:deployed`, read-only transaction): every repository migration applied (and none unknown), the security baseline (RLS, policies, definer `search_path`, anon access, invoker views, no TRUNCATE grants), the new-user trigger, private storage buckets, scheduled jobs, an active PM template, a Super Admin, and demo data in production (warning). Tested against local databases, including a simulated missing / unknown migration.
+- **Health endpoint** `/api/health` (public, no data): 200 when the Supabase project is reachable, 503 otherwise, with the deployed commit — for uptime monitoring and the workflow's post-deploy check (browser-tested).
+- **Mobile release configuration**: `eas.json` (internal-testing APK profile, Play Store bundle profile with remote version codes, submit to the internal track as a draft), app icon, Android adaptive icon and notification icon from the brand mark, export-compliance flag, `expo-system-ui` so the light theme applies on Android, obsolete `edgeToEdgeEnabled` removed, and unused permissions (external storage, draw-over-apps) blocked — checked with `expo prebuild`.
+
+### Known limitations after Phase 10
+
+- **Not deployed.** Supabase, Vercel, Expo and Google Play accounts must be created by IPT PowerTech; the workflow has not run against real projects. Docker images for a local Supabase stack could not be downloaded in this environment, so the migrations have been verified on PostgreSQL 16 with the platform shim, not on a Supabase instance — the first staging deploy is that check (`pnpm verify:deployed` reports any gap).
+- `eas init` (project id, owner) and the Android signing key are created by the account owner; push notifications need the Firebase (FCM) credentials.
+- Over-the-air updates (`expo-updates`) are not set up; app fixes ship as new builds.
+- The device test plan is still to be run on real phones.
 
 ### Known limitations after Phase 9
 

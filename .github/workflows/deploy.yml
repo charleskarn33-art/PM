@@ -1,0 +1,127 @@
+name: Deploy
+
+# Manual, per environment. Configure two GitHub Environments, `staging` and
+# `production` (Settings → Environments; add required reviewers to
+# production), each with the secrets and variables listed in
+# docs/DEPLOYMENT.md. Order: all checks → database → web and mobile.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        required: true
+      mobile:
+        description: Also start an Android build on EAS
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  database:
+    needs: checks
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Link the project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF"
+      - name: Migrations to apply
+        run: supabase db push --dry-run
+      # Migrations only: supabase/seed.sql (demo data) is never pushed.
+      - name: Apply migrations
+        run: supabase db push
+      - name: Deploy the push-notification function
+        run: supabase functions deploy send-push --no-verify-jwt --project-ref "$SUPABASE_PROJECT_REF"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify the deployed database (read-only)
+        run: pnpm verify:deployed
+        env:
+          DEPLOY_DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+          DEPLOY_ENV: ${{ inputs.environment }}
+
+  web:
+    needs: database
+    # Skipped when the web app deploys through Vercel's Git integration instead.
+    if: vars.VERCEL_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+      VERCEL_ENV: ${{ inputs.environment == 'production' && 'production' || 'preview' }}
+      PROD_FLAG: ${{ inputs.environment == 'production' && '--prod' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: npm install --global vercel@latest
+      - name: Pull the Vercel project settings and environment variables
+        run: vercel pull --yes --environment="$VERCEL_ENV" --token="$VERCEL_TOKEN"
+      - name: Build
+        run: vercel build $PROD_FLAG --token="$VERCEL_TOKEN"
+      - name: Deploy
+        id: deploy
+        run: echo "url=$(vercel deploy --prebuilt $PROD_FLAG --token="$VERCEL_TOKEN")" >> "$GITHUB_OUTPUT"
+      - name: Health check
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+          BYPASS: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          for i in 1 2 3 4 5; do
+            if curl -fsS -H "x-vercel-protection-bypass: $BYPASS" "$URL/api/health"; then exit 0; fi
+            sleep 10
+          done
+          echo "Health check failed for $URL" >&2
+          exit 1
+
+  mobile:
+    needs: database
+    if: inputs.mobile
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      # Builds on EAS with that profile's EAS environment variables
+      # (EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY).
+      - name: Start the Android build
+        run: eas build --platform android --profile ${{ inputs.environment == 'production' && 'production' || 'preview' }} --non-interactive --no-wait

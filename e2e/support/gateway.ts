@@ -113,6 +113,7 @@ export async function startGateway(): Promise<{ close: () => Promise<void> }> {
         if (!claims) return json(res, 401, { code: 401, error_code: 'bad_jwt', msg: 'invalid JWT' });
         return json(res, 200, userJson({ id: claims.sub, email: claims.email }));
       }
+      if (path === '/auth/v1/health') return json(res, 200, { name: 'e2e-gateway' });
       if (path === '/auth/v1/logout') {
         res.writeHead(204);
         return res.end();

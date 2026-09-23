@@ -61,6 +61,7 @@ describe('routes', () => {
     expect(isPublicPath('/login')).toBe(true);
     expect(isPublicPath('/forgot-password')).toBe(true);
     expect(isPublicPath('/auth/confirm')).toBe(true);
+    expect(isPublicPath('/api/health')).toBe(true);
     expect(isPublicPath('/auth/set-password')).toBe(false);
     expect(isPublicPath('/dashboard')).toBe(false);
   });
