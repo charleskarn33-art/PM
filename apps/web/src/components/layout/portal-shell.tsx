@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronRight, Menu, X } from 'lucide-react';
+import { Bell, ChevronRight, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
@@ -14,10 +14,11 @@ interface PortalShellProps {
   sections: NavSection[];
   userName: string;
   roleLabel: string;
+  unreadNotifications: number;
   children: React.ReactNode;
 }
 
-export function PortalShell({ sections, userName, roleLabel, children }: PortalShellProps) {
+export function PortalShell({ sections, userName, roleLabel, unreadNotifications, children }: PortalShellProps) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const crumbs = breadcrumbsFor(pathname);
@@ -58,6 +59,18 @@ export function PortalShell({ sections, userName, roleLabel, children }: PortalS
               ))}
             </ol>
           </nav>
+          <Link
+            href="/notifications"
+            className="relative inline-flex size-10 items-center justify-center rounded-md hover:bg-muted"
+            aria-label={unreadNotifications ? `Notifications: ${unreadNotifications} unread` : 'Notifications'}
+          >
+            <Bell className="size-5" aria-hidden />
+            {unreadNotifications ? (
+              <span className="absolute right-1 top-1 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-4 text-white">
+                {unreadNotifications > 99 ? '99+' : unreadNotifications}
+              </span>
+            ) : null}
+          </Link>
           <div className="hidden text-right sm:block">
             <p className="text-sm font-medium leading-tight">{userName}</p>
             <Badge tone="outline" className="mt-0.5">

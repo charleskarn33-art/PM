@@ -1,5 +1,6 @@
 import {
   can,
+  FAILURE_STATUS_TONE,
   formatDistance,
   humanizeStatus,
   ISSUE_LABELS,
@@ -56,7 +57,12 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
   const detail = await loadVisitDetail(supabase, id);
   if (!detail) notFound();
   const { visit, raw, sections, items, readingFields, responses, readings, photoCounts, photos, issues, state, analytics, dcThresholds } = detail;
-  const photoUrls = await signPhotoUrls(supabase, photos);
+  const [photoUrls, raised] = await Promise.all([
+    signPhotoUrls(supabase, photos),
+    supabase.from('failure_overview').select('id, failure_number, status, severity, item_prompt, open_action_count').eq('visit_id', id).order('failure_number'),
+  ]);
+  if (raised.error) throw new Error(`Unable to load failures: ${raised.error.message}`);
+  const failures = raised.data ?? [];
   const photosFor = (itemId: string) => photos.filter((p) => p.checklist_item_id === itemId);
 
   const progress = visitProgress(state);
@@ -119,6 +125,33 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
           {issues.length} item{issues.length === 1 ? '' : 's'} still incomplete (answers, comments or photos). The technician cannot
           submit until they are resolved.
         </Alert>
+      ) : null}
+
+      {failures.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Failures raised by this PM</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="divide-y">
+              {failures.map((f) => (
+                <li key={f.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                  <span>
+                    <Link href={`/failures/${f.id}`} className="font-medium hover:underline">
+                      {f.failure_number}
+                    </Link>{' '}
+                    {f.item_prompt}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    {f.open_action_count ? <span className="text-muted-foreground">{f.open_action_count} open action(s)</span> : null}
+                    <StatusBadge status={f.severity!} tone={SEVERITY_TONE[f.severity!]} />
+                    <StatusBadge status={f.status!} tone={FAILURE_STATUS_TONE[f.status!]} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
       ) : null}
 
       {canReview ? (

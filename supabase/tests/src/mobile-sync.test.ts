@@ -198,7 +198,9 @@ describe.skipIf(!postgrestBinary())('mobile offline sync end to end (real API)',
       await c.query('delete from public.pm_photos where visit_id = any($1::uuid[])', [created]);
       await c.query('delete from public.pm_responses where visit_id = any($1::uuid[])', [created]);
       await c.query('delete from public.pm_readings where visit_id = any($1::uuid[])', [created]);
+      await c.query('delete from public.corrective_actions where visit_id = any($1::uuid[])', [created]);
       await c.query('delete from public.failures where visit_id = any($1::uuid[])', [created]);
+      await c.query('delete from public.notifications where entity_id = any($1::uuid[])', [created]);
       await c.query('delete from public.pm_visits where id = any($1::uuid[])', [created]);
       await c.query(`delete from storage.objects where name like $1`, [`${SITE}/%`]);
       await c.query('commit');

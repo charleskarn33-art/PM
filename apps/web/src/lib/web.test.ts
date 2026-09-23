@@ -84,7 +84,7 @@ describe('navigation', () => {
     expect(labels('viewer')).not.toContain('PM Templates');
   });
   it('gives technicians a field-focused menu', () => {
-    expect(labels('technician')).toEqual(['Dashboard', 'Sites', 'Failures', 'Corrective Actions', 'My Profile']);
+    expect(labels('technician')).toEqual(['Dashboard', 'Sites', 'Corrective Actions', 'Notifications', 'My Profile']);
   });
   it('opens Phase 2 organisation screens', () => {
     expect(labels('super_admin')).toEqual(expect.arrayContaining(['Sites', 'Technicians', 'Supervisors', 'Users', 'Organization']));

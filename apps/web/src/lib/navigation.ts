@@ -16,6 +16,7 @@ export type NavIcon =
   | 'templates'
   | 'settings'
   | 'audit'
+  | 'notifications'
   | 'profile';
 
 export interface NavItem {
@@ -47,8 +48,8 @@ export const NAVIGATION: NavSection[] = [
       { label: 'Supervisors', href: '/supervisors', icon: 'supervisors', roles: ['super_admin', 'regional_manager', 'viewer'] },
       { label: 'PM Schedule', href: '/schedule', icon: 'schedule', roles: READ_ROLES },
       { label: 'PM Visits & Review', href: '/visits', icon: 'visits', roles: READ_ROLES },
-      { label: 'Failures', href: '/failures', icon: 'failures', plannedPhase: 6 },
-      { label: 'Corrective Actions', href: '/corrective-actions', icon: 'actions', plannedPhase: 6 },
+      { label: 'Failures', href: '/failures', icon: 'failures', roles: READ_ROLES },
+      { label: 'Corrective Actions', href: '/corrective-actions', icon: 'actions' },
     ],
   },
   {
@@ -75,7 +76,10 @@ export const NAVIGATION: NavSection[] = [
   },
   {
     title: 'Account',
-    items: [{ label: 'My Profile', href: '/profile', icon: 'profile' }],
+    items: [
+      { label: 'Notifications', href: '/notifications', icon: 'notifications' },
+      { label: 'My Profile', href: '/profile', icon: 'profile' },
+    ],
   },
 ];
 

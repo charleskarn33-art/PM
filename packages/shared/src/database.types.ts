@@ -762,6 +762,7 @@ export type Database = {
           updated_at: string;
           created_by: string | null;
           updated_by: string | null;
+          resolution_note: string | null;
         };
         Insert: {
           id?: string;
@@ -786,6 +787,7 @@ export type Database = {
           updated_at?: string;
           created_by?: string | null;
           updated_by?: string | null;
+          resolution_note?: string | null;
         };
         Update: {
           id?: string;
@@ -810,6 +812,7 @@ export type Database = {
           updated_at?: string;
           created_by?: string | null;
           updated_by?: string | null;
+          resolution_note?: string | null;
         };
         Relationships: [
           {
@@ -952,6 +955,7 @@ export type Database = {
           read_at: string | null;
           push_sent_at: string | null;
           created_at: string;
+          dedupe_key: string | null;
         };
         Insert: {
           id?: string;
@@ -964,6 +968,7 @@ export type Database = {
           read_at?: string | null;
           push_sent_at?: string | null;
           created_at?: string;
+          dedupe_key?: string | null;
         };
         Update: {
           id?: string;
@@ -976,6 +981,7 @@ export type Database = {
           read_at?: string | null;
           push_sent_at?: string | null;
           created_at?: string;
+          dedupe_key?: string | null;
         };
         Relationships: [
           {
@@ -2065,6 +2071,38 @@ export type Database = {
           },
         ];
       };
+      push_tokens: {
+        Row: {
+          token: string;
+          profile_id: string;
+          platform: string;
+          created_at: string;
+          last_seen_at: string;
+        };
+        Insert: {
+          token: string;
+          profile_id: string;
+          platform: string;
+          created_at?: string;
+          last_seen_at?: string;
+        };
+        Update: {
+          token?: string;
+          profile_id?: string;
+          platform?: string;
+          created_at?: string;
+          last_seen_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'push_tokens_profile_id_fkey';
+            columns: ['profile_id'];
+            isOneToOne: false;
+            referencedRelation: 'profiles';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       regions: {
         Row: {
           id: string;
@@ -2664,6 +2702,72 @@ export type Database = {
       };
     };
     Views: {
+      corrective_action_overview: {
+        Row: {
+          id: string | null;
+          action_number: string | null;
+          status: Database['public']['Enums']['corrective_action_status'] | null;
+          priority: Database['public']['Enums']['priority_level'] | null;
+          category: Database['public']['Enums']['pm_category'] | null;
+          description: string | null;
+          resolution: string | null;
+          due_date: string | null;
+          assigned_at: string | null;
+          completed_at: string | null;
+          verified_at: string | null;
+          closed_at: string | null;
+          created_at: string | null;
+          is_overdue: boolean | null;
+          site_id: string | null;
+          site_code: string | null;
+          site_name: string | null;
+          region_id: string | null;
+          region_name: string | null;
+          is_demo: boolean | null;
+          failure_id: string | null;
+          failure_number: string | null;
+          failure_severity: Database['public']['Enums']['severity_level'] | null;
+          visit_id: string | null;
+          assigned_to: string | null;
+          assignee_name: string | null;
+          assignee_role: Database['public']['Enums']['app_role'] | null;
+          assigned_by: string | null;
+          assigned_by_name: string | null;
+          verified_by: string | null;
+          verified_by_name: string | null;
+        };
+        Relationships: [];
+      };
+      failure_overview: {
+        Row: {
+          id: string | null;
+          failure_number: string | null;
+          source: Database['public']['Enums']['failure_source'] | null;
+          status: Database['public']['Enums']['failure_status'] | null;
+          severity: Database['public']['Enums']['severity_level'] | null;
+          category: Database['public']['Enums']['pm_category'] | null;
+          description: string | null;
+          resolution_note: string | null;
+          detected_at: string | null;
+          resolved_at: string | null;
+          verified_at: string | null;
+          closed_at: string | null;
+          site_id: string | null;
+          site_code: string | null;
+          site_name: string | null;
+          region_id: string | null;
+          region_name: string | null;
+          is_demo: boolean | null;
+          visit_id: string | null;
+          checklist_item_id: string | null;
+          item_prompt: string | null;
+          technician_id: string | null;
+          technician_name: string | null;
+          action_count: number | null;
+          open_action_count: number | null;
+        };
+        Relationships: [];
+      };
       pm_schedule_overview: {
         Row: {
           id: string | null;
@@ -2832,6 +2936,22 @@ export type Database = {
         };
         Returns: Database['public']['Tables']['profiles']['Row'];
       };
+      can_manage_site: {
+        Args: {
+          p_site_id: string;
+        };
+        Returns: boolean;
+      };
+      corrective_action_assignees: {
+        Args: {
+          p_site_id: string;
+        };
+        Returns: { id: string; full_name: string; role: Database['public']['Enums']['app_role'] }[];
+      };
+      mark_all_notifications_read: {
+        Args: never;
+        Returns: number;
+      };
       mark_overdue_schedules: {
         Args: never;
         Returns: number;
@@ -2857,6 +2977,30 @@ export type Database = {
           p_report: string;
           p_filters?: Json;
           p_row_count?: number;
+        };
+        Returns: undefined;
+      };
+      register_push_token: {
+        Args: {
+          p_token: string;
+          p_platform: string;
+        };
+        Returns: undefined;
+      };
+      return_corrective_action: {
+        Args: {
+          p_action_id: string;
+          p_note: string;
+        };
+        Returns: undefined;
+      };
+      run_daily_notifications: {
+        Args: never;
+        Returns: number;
+      };
+      unregister_push_token: {
+        Args: {
+          p_token: string;
         };
         Returns: undefined;
       };

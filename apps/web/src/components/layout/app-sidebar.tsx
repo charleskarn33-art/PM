@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  Bell,
   BarChart3,
   Building2,
   CalendarClock,
@@ -41,6 +42,7 @@ const ICONS: Record<NavIcon, LucideIcon> = {
   templates: ListChecks,
   settings: Settings,
   audit: History,
+  notifications: Bell,
   profile: UserRound,
 };
 

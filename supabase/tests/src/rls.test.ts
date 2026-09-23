@@ -189,14 +189,15 @@ describe('audit log and notifications', () => {
   it('notifications are private to the recipient and only read_at is writable', async () => {
     await inTx(async (c) => {
       await c.query(
-        `insert into public.notifications (recipient_id, type, title) values ($1, 'PM_SCHEDULED', 'PM scheduled')`,
+        `insert into public.notifications (recipient_id, type, title) values ($1, 'PM_SCHEDULED', 'RLS test notification')`,
         [ids.techA],
       );
+      const mine = `select * from public.notifications where title = 'RLS test notification'`;
       await actAs(c, ids.techB);
-      expect((await c.query(`select * from public.notifications`)).rowCount).toBe(0);
+      expect((await c.query(mine)).rowCount).toBe(0);
       await actAs(c, ids.techA);
-      expect((await c.query(`select * from public.notifications`)).rowCount).toBe(1);
-      expect((await tryQuery(c, `update public.notifications set read_at = now()`)).rowCount).toBe(1);
+      expect((await c.query(mine)).rowCount).toBe(1);
+      expect((await tryQuery(c, `update public.notifications set read_at = now() where title = 'RLS test notification'`)).rowCount).toBe(1);
       expect((await tryQuery(c, `update public.notifications set title = 'x'`)).error?.code).toBe('42501');
     });
   });

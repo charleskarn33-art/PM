@@ -11,4 +11,5 @@ export * from './pm/recurrence';
 export * from './validation/template';
 export * from './validation/schedule';
 export * from './validation/settings';
+export * from './validation/actions';
 export * from './geo/geofence';

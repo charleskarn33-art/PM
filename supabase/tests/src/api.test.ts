@@ -9,6 +9,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { loadDashboard, monthPeriod } from '@/lib/dashboard';
 import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
+import { loadActionDetail } from '@/lib/corrective-actions';
+import { canManageSite, loadAssignees, loadFailureDetail } from '@/lib/failures';
 import { loadVisitAnalytics, loadVisitDetail, signPhotoUrls } from '@/lib/pm-visit';
 import { parseSiteParams, siteQuery } from '@/lib/sites';
 import { ids } from './db';
@@ -288,6 +290,53 @@ describe.skipIf(!postgrestBinary())('PostgREST API', () => {
         { id: 'p1', checklist_item_id: null, section_id: null, file_path: 'a/b/c.jpg', thumbnail_path: null, taken_at: new Date().toISOString(), caption: null },
       ]);
       expect(urls.size).toBe(0);
+    });
+  });
+
+  describe('Phase 6: failures, corrective actions, notifications', () => {
+    const missing = '00000000-0000-4000-8000-000000000000';
+
+    it('web: failure and action loaders resolve (embeds, views)', async () => {
+      expect(await loadFailureDetail(as(ids.supervisorA), missing)).toBeNull();
+      expect(await loadActionDetail(as(ids.supervisorA), missing)).toBeNull();
+      const api = apiAs(ids.supervisorA);
+      const [failures, actions, raised] = await Promise.all([
+        api.from('failure_overview').select('*', { count: 'exact' }).in('status', ['OPEN', 'ASSIGNED']).or('failure_number.ilike.%FL%,site_code.ilike.%T-%').order('detected_at', { ascending: false }).range(0, 24),
+        api.from('corrective_action_overview').select('*', { count: 'exact' }).eq('is_overdue', true).order('due_date').range(0, 24),
+        api.from('failure_overview').select('id, failure_number, status, severity, item_prompt, open_action_count').eq('visit_id', missing),
+      ]);
+      expect([failures.error, actions.error, raised.error]).toEqual([null, null, null]);
+    });
+
+    it('web: permission and assignee RPCs', async () => {
+      expect(await canManageSite(as(ids.supervisorA), ids.siteA1)).toBe(true);
+      expect(await canManageSite(as(ids.managerA), ids.siteA1)).toBe(false);
+      const assignees = await loadAssignees(as(ids.supervisorA), ids.siteA1);
+      expect(assignees.map((a) => a.id).sort()).toEqual([ids.techA, ids.maintenance, ids.supervisorA].sort());
+      expect(await loadAssignees(as(ids.viewer), ids.siteA1)).toEqual([]);
+    });
+
+    it('web + mobile: notification queries, mark-all RPC, push token RPC', async () => {
+      const api = apiAs(ids.techA);
+      const list = await api.from('notifications').select('id, type, title, body, entity_type, entity_id, read_at, created_at').order('created_at', { ascending: false }).limit(100);
+      expect(list.error).toBeNull();
+      expect(list.data?.map((n) => n.type)).toContain('SITE_ASSIGNED');
+      const unread = await api.from('notifications').select('id', { count: 'exact', head: true }).is('read_at', null);
+      expect(unread.error).toBeNull();
+      expect((await api.rpc('mark_all_notifications_read')).error).toBeNull();
+      expect((await api.rpc('register_push_token', { p_token: 'ExponentPushToken[api-test]', p_platform: 'android' })).error).toBeNull();
+      expect((await apiAs(null).rpc('register_push_token', { p_token: 'ExponentPushToken[x]', p_platform: 'ios' })).error).not.toBeNull();
+    });
+
+    it('web: supervisor creates a corrective action from the API the way the form does', async () => {
+      const r = await apiAs(ids.supervisorA)
+        .from('corrective_actions')
+        .insert({ site_id: ids.siteA1, category: 'DC_SYSTEM', description: 'API test action', priority: 'HIGH', assigned_to: ids.techA, due_date: today })
+        .select('id')
+        .single();
+      expect(r.error).toBeNull();
+      const t = await apiAs(ids.techA).rpc('return_corrective_action', { p_action_id: missing, p_note: 'nope' });
+      expect(t.error?.message).toMatch(/Only a completed corrective action/);
     });
   });
 });
