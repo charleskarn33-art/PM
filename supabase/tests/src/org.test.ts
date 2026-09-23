@@ -192,9 +192,37 @@ describe('organisation audit trail', () => {
         [rows[0].id],
       );
       expect(audit.rows).toEqual([
-        { action: 'REGION_INSERT', metadata: {} },
-        { action: 'REGION_UPDATE', metadata: { changed: ['name'] } },
+        { action: 'REGION_INSERT', metadata: { record: { code: 'NEW', name: 'New Region' } } },
+        { action: 'REGION_UPDATE', metadata: { changes: { name: { from: 'New Region', to: 'Renamed' } } } },
       ]);
+
+      // A deletion keeps a snapshot; an update that changes nothing meaningful is not logged.
+      await c.query(`update public.regions set updated_at = now() where id = $1`, [rows[0].id]);
+      await c.query(`delete from public.regions where id = $1`, [rows[0].id]);
+      const after = await c.query(`select action, metadata from public.audit_logs where entity_id = $1 order by id`, [rows[0].id]);
+      expect(after.rows.map((r) => r.action)).toEqual(['REGION_INSERT', 'REGION_UPDATE', 'REGION_DELETE']);
+      expect(after.rows[2].metadata.deleted).toMatchObject({ code: 'NEW', name: 'Renamed', is_active: true });
+    });
+  });
+
+  it('keeps the audit log append-only and readable only by Super Admins', async () => {
+    await inTx(async (c) => {
+      await actAs(c, ids.admin);
+      await c.query(`update public.regions set name = name || ' x' where id = $1`, [ids.regionA]);
+      const entry = (await c.query(`select id, actor_name, actor_role from public.audit_log_overview where entity_id = $1 order by id desc limit 1`, [ids.regionA])).rows[0];
+      expect(entry).toMatchObject({ actor_name: 'admin', actor_role: 'super_admin' });
+      const facets = await c.query(`select kind, value from public.audit_log_facets()`);
+      expect(facets.rows).toEqual(expect.arrayContaining([{ kind: 'action', value: 'REGION_UPDATE' }, { kind: 'entity', value: 'regions' }]));
+
+      // Not even the database owner can rewrite history.
+      await actAs(c, null);
+      expect((await tryQuery(c, `update public.audit_logs set action = 'X' where id = $1`, [entry.id])).error?.message).toMatch(/cannot be changed/);
+      expect((await tryQuery(c, `delete from public.audit_logs where id = $1`, [entry.id])).error?.message).toMatch(/cannot be changed/);
+
+      for (const who of [ids.managerA, ids.supervisorA, ids.viewer, ids.techA]) {
+        await actAs(c, who);
+        expect((await c.query(`select 1 from public.audit_log_overview limit 1`)).rowCount).toBe(0);
+      }
     });
   });
 });

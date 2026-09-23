@@ -2702,6 +2702,21 @@ export type Database = {
       };
     };
     Views: {
+      audit_log_overview: {
+        Row: {
+          id: number | null;
+          created_at: string | null;
+          action: string | null;
+          entity_type: string | null;
+          entity_id: string | null;
+          metadata: Json | null;
+          actor_id: string | null;
+          actor_name: string | null;
+          actor_email: string | null;
+          actor_role: Database['public']['Enums']['app_role'] | null;
+        };
+        Relationships: [];
+      };
       corrective_action_overview: {
         Row: {
           id: string | null;
@@ -2967,6 +2982,10 @@ export type Database = {
           p_region?: string;
         };
         Returns: { technician_id: string; technician_name: string; region_name: string; pm_submitted: number; pm_approved: number; pm_returned: number; pm_awaiting_review: number; avg_pm_minutes: number; failures_reported: number; actions_assigned: number; actions_completed: number; actions_overdue: number }[];
+      };
+      audit_log_facets: {
+        Args: never;
+        Returns: { kind: string; value: string }[];
       };
       can_manage_site: {
         Args: {

@@ -2,6 +2,7 @@ import { humanizeStatus, PM_STATUS_TONE, type Enums } from '@ipt/shared';
 import { Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
 import { SortHeader } from '@/components/data-table/sort-header';
@@ -14,12 +15,14 @@ import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
 import { requireRole } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
-import { pageRange, parseTableParams, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { VISIT_STATUSES, visitListQuery } from '@/lib/list-queries';
+import { isBeyondLastPage, pageRange, parseTableParams, tableHref, type SearchParams } from '@/lib/table-params';
+import { ExportLink } from '@/components/export-link';
 
 export const metadata: Metadata = { title: 'PM Visits & Review' };
 
 const SORTS = ['submitted_at', 'started_at', 'site_code', 'technician_name', 'completion_pct', 'failure_count', 'status'] as const;
-const STATUSES: Enums<'pm_status'>[] = ['SUBMITTED', 'IN_PROGRESS', 'COMPLETED', 'APPROVED', 'REJECTED', 'CANCELLED'];
+const STATUSES = VISIT_STATUSES;
 const when = (v: string | null) => (v ? new Date(v).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
 export default async function VisitsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
@@ -30,25 +33,23 @@ export default async function VisitsPage({ searchParams }: { searchParams: Promi
   const status = (f.status ?? 'SUBMITTED') as Enums<'pm_status'> | 'ALL';
   const supabase = await createClient();
 
-  let query = supabase.from('pm_visit_overview').select('*', { count: 'exact' });
-  if (status !== 'ALL' && (STATUSES as string[]).includes(status)) query = query.eq('status', status);
-  if (f.from) query = query.gte('started_at', `${f.from}T00:00:00`);
-  if (f.to) query = query.lte('started_at', `${f.to}T23:59:59.999`);
-  if (params.q) {
-    const p = toIlikePattern(params.q);
-    query = query.or(`site_code.ilike.${p},site_name.ilike.${p},technician_name.ilike.${p}`);
-  }
+  const query = visitListQuery(supabase, params.q, f);
   const { from, to } = pageRange(params.page, params.pageSize);
   const { data, count, error } = await query
     .order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false })
     .range(from, to);
+  if (isBeyondLastPage(error)) redirect(tableHref('/visits', sp, { page: null }));
   if (error) throw new Error(`Unable to load PM visits: ${error.message}`);
   const rows = data ?? [];
   const sortProps = { pathname: '/visits', searchParams: sp, sort: params.sort, dir: params.dir };
 
   return (
     <div className="space-y-6">
-      <PageHeader title="PM Visits & Review" description="Submitted PM awaiting review, and PM history." />
+      <PageHeader
+        title="PM Visits & Review"
+        description="Submitted PM awaiting review, and PM history."
+        actions={<ExportLink href="/visits/export" searchParams={sp} />}
+      />
       <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-5">
         <div className="relative md:col-span-2">
           <Search className="absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />

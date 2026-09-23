@@ -2,6 +2,7 @@ import { can, humanizeStatus, PM_STATUS_TONE, type Enums } from '@ipt/shared';
 import { Plus, Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
 import { SortHeader } from '@/components/data-table/sort-header';
@@ -16,7 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { requireRole } from '@/lib/auth';
 import { loadRegions } from '@/lib/org-data';
 import { createClient } from '@/lib/supabase/server';
-import { pageRange, parseTableParams, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { isBeyondLastPage, pageRange, parseTableParams, tableHref, toIlikePattern, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'PM Schedule' };
 
@@ -51,6 +52,7 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
     query.order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false }).order('site_code').range(from, to),
     loadRegions(supabase),
   ]);
+  if (isBeyondLastPage(error)) redirect(tableHref('/schedule', sp, { page: null }));
   if (error) throw new Error(`Unable to load PM schedule: ${error.message}`);
   const rows = data ?? [];
   const sortProps = { pathname: '/schedule', searchParams: sp, sort: params.sort, dir: params.dir };

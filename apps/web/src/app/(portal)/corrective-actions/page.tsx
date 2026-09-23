@@ -1,7 +1,8 @@
-import { CORRECTIVE_ACTION_STATUS_TONE, humanizeStatus, PM_CATEGORY_LABELS, PRIORITIES, SEVERITY_TONE, type Enums } from '@ipt/shared';
+import { CORRECTIVE_ACTION_STATUS_TONE, humanizeStatus, PM_CATEGORY_LABELS, PRIORITIES, SEVERITY_TONE } from '@ipt/shared';
 import { Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
 import { SortHeader } from '@/components/data-table/sort-header';
@@ -14,13 +15,14 @@ import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requireSession } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
-import { pageRange, parseTableParams, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { ACTION_STATUSES, actionListQuery } from '@/lib/list-queries';
+import { isBeyondLastPage, pageRange, parseTableParams, tableHref, type SearchParams } from '@/lib/table-params';
+import { ExportLink } from '@/components/export-link';
 
 export const metadata: Metadata = { title: 'Corrective Actions' };
 
 const SORTS = ['due_date', 'created_at', 'action_number', 'site_code', 'priority', 'status', 'assignee_name'] as const;
-const STATUSES: Enums<'corrective_action_status'>[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'VERIFIED', 'CLOSED'];
-const ACTIVE: Enums<'corrective_action_status'>[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED'];
+const STATUSES = ACTION_STATUSES;
 
 export default async function CorrectiveActionsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
@@ -30,26 +32,21 @@ export default async function CorrectiveActionsPage({ searchParams }: { searchPa
   const status = f.status ?? 'ACTIVE';
   const supabase = await createClient();
 
-  let query = supabase.from('corrective_action_overview').select('*', { count: 'exact' });
-  if (status === 'ACTIVE') query = query.in('status', ACTIVE);
-  else if (status === 'REVIEW') query = query.eq('status', 'COMPLETED');
-  else if ((STATUSES as string[]).includes(status)) query = query.eq('status', status as Enums<'corrective_action_status'>);
-  if (f.priority && (PRIORITIES as string[]).includes(f.priority)) query = query.eq('priority', f.priority as Enums<'priority_level'>);
-  if (f.overdue === '1') query = query.eq('is_overdue', true);
-  if (f.mine === '1') query = query.eq('assigned_to', session.userId);
-  if (params.q) {
-    const p = toIlikePattern(params.q);
-    query = query.or(`action_number.ilike.${p},site_code.ilike.${p},site_name.ilike.${p},description.ilike.${p},assignee_name.ilike.${p},failure_number.ilike.${p}`);
-  }
+  const query = actionListQuery(supabase, params.q, f, session.userId);
   const { from, to } = pageRange(params.page, params.pageSize);
   const { data, count, error } = await query.order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false }).range(from, to);
+  if (isBeyondLastPage(error)) redirect(tableHref('/corrective-actions', sp, { page: null }));
   if (error) throw new Error(`Unable to load corrective actions: ${error.message}`);
   const rows = data ?? [];
   const sortProps = { pathname: '/corrective-actions', searchParams: sp, sort: params.sort, dir: params.dir };
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Corrective Actions" description="Repair work raised from failures: assignment, progress, verification and closure." />
+      <PageHeader
+        title="Corrective Actions"
+        description="Repair work raised from failures: assignment, progress, verification and closure."
+        actions={<ExportLink href="/corrective-actions/export" searchParams={sp} />}
+      />
       <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">
         <div className="relative md:col-span-2">
           <Search className="absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />

@@ -1,6 +1,7 @@
 import { Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
 import { SortHeader } from '@/components/data-table/sort-header';
@@ -13,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { requireRole } from '@/lib/auth';
 import { loadRegions, loadSupervisors } from '@/lib/org-data';
 import { createClient } from '@/lib/supabase/server';
-import { pageRange, parseTableParams, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { isBeyondLastPage, pageRange, parseTableParams, tableHref, toIlikePattern, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'Technicians' };
 
@@ -39,6 +40,7 @@ export default async function TechniciansPage({ searchParams }: { searchParams: 
     loadRegions(supabase),
     loadSupervisors(supabase),
   ]);
+  if (isBeyondLastPage(error)) redirect(tableHref('/technicians', sp, { page: null }));
   if (error) throw new Error(`Unable to load technicians: ${error.message}`);
   const rows = data ?? [];
   const sortProps = { pathname: '/technicians', searchParams: sp, sort: params.sort, dir: params.dir };

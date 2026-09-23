@@ -2,6 +2,7 @@ import { can, humanizeStatus, PM_STATUS_TONE, toIsoDate } from '@ipt/shared';
 import { Download, Plus, Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { EmptyRow } from '@/components/empty-row';
 import { ColumnToggle } from '@/components/data-table/column-toggle';
 import { Pagination } from '@/components/data-table/pagination';
@@ -17,7 +18,7 @@ import { requireSession } from '@/lib/auth';
 import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
 import { parseSiteParams, siteQuery, type SiteOverview } from '@/lib/sites';
 import { createClient } from '@/lib/supabase/server';
-import type { SearchParams } from '@/lib/table-params';
+import { isBeyondLastPage, tableHref, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'Sites' };
 
@@ -63,6 +64,7 @@ export default async function SitesPage({ searchParams }: { searchParams: Promis
     loadCounties(supabase),
     loadSupervisors(supabase),
   ]);
+  if (isBeyondLastPage(error)) redirect(tableHref('/sites', sp, { page: null }));
   if (error) throw new Error(`Unable to load sites: ${error.message}`);
   const sites = data ?? [];
   const show = (key: string) => !params.hidden.has(key);

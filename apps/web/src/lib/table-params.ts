@@ -75,3 +75,12 @@ export function pageRange(page: number, pageSize: number): { from: number; to: n
   const from = (page - 1) * pageSize;
   return { from, to: from + pageSize - 1 };
 }
+
+/**
+ * PostgREST answers a counted query whose offset is past the last row with
+ * PGRST103 (416) instead of an empty page, e.g. after filters shrink a list
+ * or on an old link. Lists go back to their first page; exports stop paging.
+ */
+export function isBeyondLastPage(error: { code?: string } | null | undefined): boolean {
+  return error?.code === 'PGRST103';
+}

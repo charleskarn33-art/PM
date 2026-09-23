@@ -139,7 +139,7 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 | 5 | Photos, GPS/geofence, offline SQLite store, outbox sync, Settings | **Done** |
 | 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | **Done** (push needs deployment setup) |
 | 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | **Done** |
-| 8 | PDF reports, CSV/Excel export, audit log UI | Planned |
+| 8 | PDF reports, CSV/Excel export, audit log UI | **Done** |
 | 9 | Test expansion (E2E), security audit, performance, device testing | Planned |
 | 10 | Production deployment (Supabase, Vercel, EAS) | Planned |
 
@@ -229,6 +229,23 @@ A row has unsent changes exactly when an outbox operation with its key exists �
   - *Equipment*: DC load by site with the configured high-load flag, phase imbalance (information only), generators, batteries, solar and earthing.
   - Every chart has a **table view** with the same numbers; charts use a validated colour order (checked for colour-vision deficiencies), status colours only for states (severity), hover tooltips, one axis per chart, and a linear line (no smoothing that would suggest values never recorded). Empty periods say so instead of drawing zero charts. The dashboard links to Analytics.
 - Tests: analytics functions against the database (grouping, on-time/overdue logic, scope per role, submitted-only readings, anonymous denied), API tests of every loader and grouping, unit tests for the period presets, month buckets and phase imbalance; browser checks of all four tabs, tooltip, invalid custom range and phone width.
+
+### Phase 8 — delivered
+
+- **PM visit PDF report** (`/visits/<id>/report`, A4, server-rendered with `@react-pdf/renderer`): header with site, region, county, technician, supervisor, start/submission times, status, completion, failure count, template version and the GPS check-in (distance, radius, mode, reason when outside). Then, per section in template order: recorded readings, the calculated DC power and phase currents (with the configured high-load flag), every checklist answer with failing answers highlighted and comments shown, and the section's photos. Ends with failures raised, overall comments, the supervisor's review and signature lines. Page numbers and "generated at / by" on every page; demo sites carry a DEMO banner. Up to 24 photos are embedded (photos of failing items first; JPEG/PNG only — anything else prints "Photo not available"). Opened from the **PDF report** button on the visit page or from **Reports**; access follows RLS (anyone who can open the visit can print it) and each report generated is audited.
+- **CSV exports** (UTF-8 with byte-order mark so Excel opens them directly; cells starting with `=`, `+`, `-` or `@` are prefixed so they never run as formulas; up to 10,000 rows, paged 1,000 at a time): PM visits, failures, corrective actions and sites — each list's **Export CSV** button exports exactly the filtered list — plus every Analytics table (compliance by region / county / technician / supervisor / month, technician performance, failures by section / severity / month / item / site, latest equipment readings). Every export is recorded in the audit log with its filters and row count.
+- **Reports** page (Super Admin, Regional Manager, Regional Supervisor, Viewer): period / region / search filters, PM visit PDFs (up to 50 most recent submitted, approved or returned PMs), list CSVs and analytics CSVs.
+- **Audit log** (migration `…1500_audit_log.sql`, Super Admin only): row changes now record *what* changed — new records' identifying fields, `{column: {from, to}}` for updates (updates that only touch timestamps are skipped), and a snapshot of deleted rows; long values are shortened in the log. The log is **append-only** for everyone including server code (a trigger rejects update/delete). `/admin/audit` lists entries with person, role, action, record (linked where it still exists) and readable details, filterable by text, action, record type and date, with CSV export.
+- Fix across all paged lists: a page number past the end (an old link, or after filters shrink the list) now returns to page 1 instead of an error page, and exports whose size is an exact multiple of 1,000 rows no longer fail on the last page.
+- Tests: audit detail, append-only and admin-only access against the database; API tests for the report data, exports and audit queries; unit tests for report formatting, audit summaries and paging; browser checks of the PDF (content and page layout), every export, the Reports and Audit pages, access per role (supervisor → 404 on audit, technician → own PDF only, bad / missing visit → 400 / 404) and phone width.
+
+### Known limitations after Phase 8
+
+- "Excel export" is CSV (opens directly in Excel); native `.xlsx` workbooks are not generated.
+- Reports use the standard PDF fonts (Latin characters only): common symbols such as ≥, ≤ and smart quotes are converted, and any other character outside Latin-1 prints as "?". Embedding a Unicode font is a small change if needed.
+- The PDF embeds at most 24 photos; all photos stay available on the visit page.
+- Exports stop at 10,000 rows — narrow the filters for larger extracts.
+- Audit entries recorded before this phase carry only the changed column names, not the before/after values.
 
 ### Known limitations after Phase 7
 

@@ -74,6 +74,8 @@ pnpm dev:web                                   # http://localhost:3000
 
 Deploy on **Vercel**: root directory `apps/web`, framework Next.js, install command `pnpm install`, and environment variables `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SITE_URL` and (server-only, for invitations) `SUPABASE_SECRET_KEY`. Add the production URL to Supabase **Auth → URL configuration**.
 
+PDF reports are rendered on the server (Node runtime, no extra service); they fetch the visit's photos through short-lived signed Storage URLs, so the server must be able to reach the Supabase URL.
+
 ## 3. Mobile app (`apps/mobile`)
 
 ```bash

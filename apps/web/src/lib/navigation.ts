@@ -56,7 +56,7 @@ export const NAVIGATION: NavSection[] = [
     title: 'Insights',
     items: [
       { label: 'Analytics', href: '/analytics', icon: 'analytics', capability: 'view_reports' },
-      { label: 'Reports', href: '/reports', icon: 'reports', capability: 'view_reports', plannedPhase: 8 },
+      { label: 'Reports', href: '/reports', icon: 'reports', capability: 'view_reports' },
     ],
   },
   {
@@ -71,7 +71,7 @@ export const NAVIGATION: NavSection[] = [
       },
       { label: 'PM Templates', href: '/admin/templates', icon: 'templates', capability: 'manage_templates' },
       { label: 'Settings', href: '/admin/settings', icon: 'settings', capability: 'manage_settings' },
-      { label: 'Audit Log', href: '/admin/audit', icon: 'audit', capability: 'view_audit_log', plannedPhase: 8 },
+      { label: 'Audit Log', href: '/admin/audit', icon: 'audit', capability: 'view_audit_log' },
     ],
   },
   {

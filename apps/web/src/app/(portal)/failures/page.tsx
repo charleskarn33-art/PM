@@ -1,7 +1,8 @@
-import { can, FAILURE_STATUS_TONE, humanizeStatus, PM_CATEGORIES, PM_CATEGORY_LABELS, SEVERITIES, SEVERITY_TONE, type Enums } from '@ipt/shared';
+import { can, FAILURE_STATUS_TONE, humanizeStatus, PM_CATEGORIES, PM_CATEGORY_LABELS, SEVERITIES, SEVERITY_TONE } from '@ipt/shared';
 import { Plus, Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
 import { SortHeader } from '@/components/data-table/sort-header';
@@ -14,13 +15,14 @@ import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requireRole } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
-import { pageRange, parseTableParams, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { FAILURE_STATUSES, failureListQuery } from '@/lib/list-queries';
+import { isBeyondLastPage, pageRange, parseTableParams, tableHref, type SearchParams } from '@/lib/table-params';
+import { ExportLink } from '@/components/export-link';
 
 export const metadata: Metadata = { title: 'Failures' };
 
 const SORTS = ['detected_at', 'failure_number', 'site_code', 'severity', 'status', 'category'] as const;
-const STATUSES: Enums<'failure_status'>[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'VERIFIED', 'CLOSED'];
-const ACTIVE: Enums<'failure_status'>[] = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED'];
+const STATUSES = FAILURE_STATUSES;
 const when = (v: string | null) => (v ? new Date(v).toLocaleDateString('en-GB', { dateStyle: 'medium' }) : '—');
 
 export default async function FailuresPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
@@ -36,20 +38,10 @@ export default async function FailuresPage({ searchParams }: { searchParams: Pro
   const status = f.status ?? 'ACTIVE';
   const supabase = await createClient();
 
-  let query = supabase.from('failure_overview').select('*', { count: 'exact' });
-  if (status === 'ACTIVE') query = query.in('status', ACTIVE);
-  else if ((STATUSES as string[]).includes(status)) query = query.eq('status', status as Enums<'failure_status'>);
-  if (f.severity && (SEVERITIES as string[]).includes(f.severity)) query = query.eq('severity', f.severity as Enums<'severity_level'>);
-  if (f.category && (PM_CATEGORIES as string[]).includes(f.category)) query = query.eq('category', f.category as Enums<'pm_category'>);
-  if (f.source === 'PM_CHECKLIST' || f.source === 'MANUAL') query = query.eq('source', f.source);
-  if (f.from) query = query.gte('detected_at', `${f.from}T00:00:00`);
-  if (f.to) query = query.lte('detected_at', `${f.to}T23:59:59.999`);
-  if (params.q) {
-    const p = toIlikePattern(params.q);
-    query = query.or(`failure_number.ilike.${p},site_code.ilike.${p},site_name.ilike.${p},description.ilike.${p}`);
-  }
+  const query = failureListQuery(supabase, params.q, f);
   const { from, to } = pageRange(params.page, params.pageSize);
   const { data, count, error } = await query.order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false }).range(from, to);
+  if (isBeyondLastPage(error)) redirect(tableHref('/failures', sp, { page: null }));
   if (error) throw new Error(`Unable to load failures: ${error.message}`);
   const rows = data ?? [];
   const sortProps = { pathname: '/failures', searchParams: sp, sort: params.sort, dir: params.dir };
@@ -60,12 +52,15 @@ export default async function FailuresPage({ searchParams }: { searchParams: Pro
         title="Failures"
         description="Failures recorded in submitted PMs and reported manually, with their corrective-action progress."
         actions={
-          can(session.role, 'manage_corrective_actions') ? (
-            <Link href="/failures/new" className={buttonVariants()}>
-              <Plus aria-hidden />
-              Report failure
-            </Link>
-          ) : null
+          <div className="flex gap-2">
+            <ExportLink href="/failures/export" searchParams={sp} />
+            {can(session.role, 'manage_corrective_actions') ? (
+              <Link href="/failures/new" className={buttonVariants()}>
+                <Plus aria-hidden />
+                Report failure
+              </Link>
+            ) : null}
+          </div>
         }
       />
       <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">

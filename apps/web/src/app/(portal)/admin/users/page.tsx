@@ -2,6 +2,7 @@ import { ROLE_LABELS, type AppRole } from '@ipt/shared';
 import { Search, UserPlus } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
 import { SortHeader } from '@/components/data-table/sort-header';
@@ -13,7 +14,7 @@ import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requireCapability } from '@/lib/auth';
 import { createClient } from '@/lib/supabase/server';
-import { pageRange, parseTableParams, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { isBeyondLastPage, pageRange, parseTableParams, tableHref, toIlikePattern, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'Users' };
 
@@ -37,6 +38,7 @@ export default async function UsersPage({ searchParams }: { searchParams: Promis
   const { data, count, error } = await query
     .order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false })
     .range(from, to);
+  if (isBeyondLastPage(error)) redirect(tableHref('/admin/users', sp, { page: null }));
   if (error) throw new Error(`Unable to load users: ${error.message}`);
   const users = data ?? [];
   const sortProps = { pathname: '/admin/users', searchParams: sp, sort: params.sort, dir: params.dir };

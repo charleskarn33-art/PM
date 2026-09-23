@@ -11,6 +11,7 @@ import { loadDashboard, monthPeriod } from '@/lib/dashboard';
 import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
 import { loadCompliance, loadFailureStats, loadLatestReadings, loadTechnicianStats } from '@/lib/analytics';
 import { loadActionDetail } from '@/lib/corrective-actions';
+import { actionListQuery, auditListQuery, failureListQuery, visitListQuery } from '@/lib/list-queries';
 import { canManageSite, loadAssignees, loadFailureDetail } from '@/lib/failures';
 import { loadVisitAnalytics, loadVisitDetail, signPhotoUrls } from '@/lib/pm-visit';
 import { parseSiteParams, siteQuery } from '@/lib/sites';
@@ -360,6 +361,33 @@ describe.skipIf(!postgrestBinary())('PostgREST API', () => {
     it('analytics are not available anonymously', async () => {
       const r = await apiAs(null).rpc('analytics_latest_readings', {});
       expect(r.error).not.toBeNull();
+    });
+  });
+
+  describe('Phase 8: exports and audit log', () => {
+    it('web: list/export query builders accept every filter combination', async () => {
+      const api = as(ids.supervisorA);
+      const results = await Promise.all([
+        visitListQuery(api, 'T-A1', { status: 'ALL', from: '2026-01-01', to: '2026-12-31' }).order('started_at').range(0, 9),
+        failureListQuery(api, 'radiator', { status: 'ACTIVE', severity: 'HIGH', category: 'GENERATOR', source: 'PM_CHECKLIST', from: '2026-01-01', to: '2026-12-31' }).range(0, 9),
+        actionListQuery(api, 'fuse', { status: 'REVIEW', priority: 'HIGH', overdue: '1', mine: '1' }, ids.supervisorA).range(0, 9),
+      ]);
+      expect(results.map((r) => r.error)).toEqual([null, null, null]);
+    });
+
+    it('web: audit log query and facets for a Super Admin; nothing for anyone else', async () => {
+      const admin = as(ids.admin);
+      const list = await auditListQuery(admin, 'admin', { action: 'SITE_INSERT', entity: 'sites', from: '2020-01-01', to: '2099-12-31' })
+        .order('created_at', { ascending: false })
+        .range(0, 24);
+      expect(list.error).toBeNull();
+      const facets = await apiAs(ids.admin).rpc('audit_log_facets');
+      expect(facets.error).toBeNull();
+      expect(facets.data?.some((f) => f.kind === 'action' && f.value === 'SITE_INSERT')).toBe(true);
+      const sup = await auditListQuery(as(ids.supervisorA), '', {}).range(0, 5);
+      expect(sup.data).toEqual([]);
+      const report = await apiAs(ids.viewer).rpc('record_report_generated', { p_report: 'pm_visit_pdf', p_filters: { visit_id: 'x' }, p_row_count: 1 });
+      expect(report.error).toBeNull();
     });
   });
 });

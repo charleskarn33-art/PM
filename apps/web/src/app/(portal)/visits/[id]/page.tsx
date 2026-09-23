@@ -11,7 +11,7 @@ import {
   visitProgress,
   type Tables,
 } from '@ipt/shared';
-import { Camera, MessageSquare } from 'lucide-react';
+import { Camera, FileDown, MessageSquare } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -85,9 +85,16 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
           </span>
         }
         actions={
-          <Link href={`/sites/${visit.site_id}`} className={buttonVariants({ variant: 'outline' })}>
-            Site
-          </Link>
+          <div className="flex gap-2">
+            {/* A route handler, not a page: plain anchors avoid client-side navigation. */}
+            <a href={`/visits/${id}/report`} target="_blank" rel="noreferrer" className={buttonVariants()}>
+              <FileDown aria-hidden />
+              PDF report
+            </a>
+            <Link href={`/sites/${visit.site_id}`} className={buttonVariants({ variant: 'outline' })}>
+              Site
+            </Link>
+          </div>
         }
       />
 

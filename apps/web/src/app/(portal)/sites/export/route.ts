@@ -2,6 +2,7 @@ import { toCsv, toIsoDate } from '@ipt/shared';
 import { NextResponse, type NextRequest } from 'next/server';
 import { parseSiteParams, siteQuery, type SiteOverview } from '@/lib/sites';
 import { createClient } from '@/lib/supabase/server';
+import { isBeyondLastPage } from '@/lib/table-params';
 
 const MAX_EXPORT_ROWS = 10_000;
 
@@ -16,6 +17,7 @@ export async function GET(request: NextRequest) {
   // PostgREST caps rows per request; page through the result set.
   for (let page = 1; rows.length < MAX_EXPORT_ROWS; page += 1) {
     const { data, error } = await siteQuery(supabase, { ...params, page, pageSize: 1000 }, today, { paginate: true });
+    if (isBeyondLastPage(error)) break; // the previous page ended exactly on the last row
     if (error) return NextResponse.json({ error: `Export failed: ${error.message}` }, { status: 500 });
     rows.push(...(data ?? []));
     if (!data || data.length < 1000) break;
