@@ -2827,6 +2827,10 @@ export type Database = {
         Args: never;
         Returns: number;
       };
+      mobile_sync_bundle: {
+        Args: never;
+        Returns: Json;
+      };
       pm_visit_issues: {
         Args: {
           p_visit_id: string;

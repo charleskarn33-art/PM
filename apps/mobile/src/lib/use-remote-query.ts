@@ -18,9 +18,9 @@ export function describeError(e: unknown): string {
 }
 
 /**
- * Runs an online Supabase query with loading / refresh / error state.
+ * Runs an online-only Supabase query with loading / refresh / error state.
  * `key` identifies the query inputs: when it changes, the query re-runs.
- * (Offline-first reads from the local SQLite store replace this in Phase 5.)
+ * Used for data that is not part of the offline copy (e.g. corrective actions).
  */
 export function useRemoteQuery<T>(fetcher: () => Promise<T>, key: string): RemoteQuery<T> {
   const [result, setResult] = useState<{ data?: T; error: string | null; loading: boolean }>({

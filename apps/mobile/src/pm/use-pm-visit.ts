@@ -1,112 +1,129 @@
 import {
+  type ChecklistState,
   type ConsistencyRule,
   visitIssues,
   visitProgress,
-  type ChecklistState,
   type Tables,
   type VisitIssue,
   type VisitProgress,
 } from '@ipt/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from '@/lib/supabase';
-import { describeError } from '@/lib/use-remote-query';
-import { EMPTY_RESPONSE, readingUpsert, responseUpsert, type Field, type Item, type ReadingRow, type ResponseRow } from './model';
+import { opKeys } from '@/offline/store';
+import type { LocalPhoto, OutboxOp, Site, Visit } from '@/offline/types';
+import { useOffline } from '@/providers/offline-provider';
+import { EMPTY_RESPONSE, type Field, type Item, type ReadingRow, type ResponseRow } from './model';
 
-type Visit = Tables<'pm_visits'>;
 type Section = Tables<'pm_sections'>;
-type Site = Pick<Tables<'sites'>, 'site_code' | 'site_name'>;
 
-export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+/** 'pending': saved on the phone, not sent yet. 'sent': the server has it. 'error': the server refused it. */
+export type SaveState = 'pending' | 'sent' | 'error';
 
 export interface PmVisitModel {
   loading: boolean;
   error: string | null;
   visit: Visit | null;
-  site: Site | null;
+  site: Pick<Site, 'id' | 'site_code' | 'site_name'> | null;
   sections: Section[];
   items: Item[];
   fields: Field[];
   responses: Map<string, ResponseRow>;
   readings: Map<string, ReadingRow>;
+  photos: LocalPhoto[];
   photoCounts: Record<string, number>;
   enforcePhotos: boolean;
   progress: VisitProgress;
   issues: VisitIssue[];
   editable: boolean;
   saveState: Record<string, SaveState>;
+  /** Changes to this visit the server refused (they hold the visit's later changes). */
+  syncErrors: OutboxOp[];
   saveError: string | null;
   setResponse: (itemId: string, patch: Partial<ResponseRow>) => void;
   setReading: (fieldId: string, patch: Partial<ReadingRow>) => void;
   setSectionNotApplicable: (sectionCode: string, notApplicable: boolean) => Promise<void>;
   saveOverallComments: (text: string) => Promise<string | null>;
   submit: () => Promise<string | null>;
-  retryFailed: () => void;
+  removePhoto: (photoId: string) => Promise<string | null>;
   reload: () => void;
 }
 
 const EDITABLE: Visit['status'][] = ['IN_PROGRESS', 'COMPLETED', 'REJECTED'];
 
+interface Loaded {
+  visit: Visit;
+  site: PmVisitModel['site'];
+  sections: Section[];
+  items: Item[];
+  fields: Field[];
+  responses: Map<string, ResponseRow>;
+  readings: Map<string, ReadingRow>;
+  photos: LocalPhoto[];
+  pendingKeys: Set<string>;
+  syncErrors: OutboxOp[];
+  enforcePhotos: boolean;
+  rules: ConsistencyRule[];
+}
+
 /**
- * Loads a PM visit with its template and answers, and saves every change
- * immediately (online). Pending/failed saves are kept and retried on request.
- * Phase 5 replaces the transport with the SQLite outbox; the UI contract stays.
+ * A PM visit read from and written to the phone's offline store. Every
+ * change is saved on the phone immediately and queued for sending; the
+ * server's answer (failure flags, progress, review) arrives on the next sync.
  */
 export function usePmVisit(visitId: string): PmVisitModel {
-  const [version, setVersion] = useState(0);
+  const { store, revision, changed, deleteFiles } = useOffline();
+  const [data, setDataState] = useState<Loaded | null>(null);
+  // Latest data for edits made in quick succession (before React re-renders).
+  const dataRef = useRef<Loaded | null>(null);
+  const setData = useCallback((next: Loaded | null) => {
+    dataRef.current = next;
+    setDataState(next);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [visit, setVisit] = useState<Visit | null>(null);
-  const [site, setSite] = useState<Site | null>(null);
-  const [sections, setSections] = useState<Section[]>([]);
-  const [items, setItems] = useState<Item[]>([]);
-  const [fields, setFields] = useState<Field[]>([]);
-  const [responses, setResponses] = useState(new Map<string, ResponseRow>());
-  const [readings, setReadings] = useState(new Map<string, ReadingRow>());
-  const [photoCounts, setPhotoCounts] = useState<Record<string, number>>({});
-  const [enforcePhotos, setEnforcePhotos] = useState(true);
-  const [rules, setRules] = useState<ConsistencyRule[]>([]);
-  const [saveState, setSaveState] = useState<Record<string, SaveState>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
-  const failed = useRef(new Map<string, () => Promise<void>>());
+  const [reloadKey, setReloadKey] = useState(0);
+  // Writes run one after another; reads wait for queued writes so they never show stale answers.
+  const chain = useRef<Promise<unknown>>(Promise.resolve());
+  const writes = useRef(0);
 
   useEffect(() => {
+    if (!store) return;
     let cancelled = false;
-    (async () => {
-      if (!supabase) throw new Error('Not configured.');
-      const v = await supabase.from('pm_visits').select('*').eq('id', visitId).single();
-      if (v.error) throw new Error(v.error.message);
-      const [siteRes, secRes, respRes, readRes, photoRes, settingRes, rulesRes] = await Promise.all([
-        supabase.from('sites').select('site_code, site_name').eq('id', v.data.site_id).maybeSingle(),
-        supabase
-          .from('pm_sections')
-          .select('*, pm_checklist_items(*), pm_reading_fields(*)')
-          .eq('template_id', v.data.template_id)
-          .order('sort_order'),
-        supabase.from('pm_responses').select('*').eq('visit_id', visitId),
-        supabase.from('pm_readings').select('reading_field_id, numeric_value, text_value').eq('visit_id', visitId),
-        supabase.from('pm_photos').select('checklist_item_id').eq('visit_id', visitId),
-        supabase.from('system_settings').select('value').eq('key', 'pm_submission').maybeSingle(),
-        supabase.from('pm_consistency_rules').select('id, lhs_key, operator, rhs_key, message, is_active').eq('is_active', true),
-      ]);
-      for (const r of [siteRes, secRes, respRes, readRes, photoRes, settingRes, rulesRes]) if (r.error) throw new Error(r.error.message);
-      if (cancelled) return;
-      const secs = secRes.data ?? [];
-      setVisit(v.data);
-      setSite(siteRes.data ?? null);
-      setSections(secs.filter((s) => s.is_active));
-      setItems(secs.flatMap((s) => s.pm_checklist_items).filter((i) => i.is_active).sort((a, b) => a.sort_order - b.sort_order));
-      setFields(secs.flatMap((s) => s.pm_reading_fields).filter((f) => f.is_active).sort((a, b) => a.sort_order - b.sort_order));
-      setResponses(new Map((respRes.data ?? []).map((r) => [r.checklist_item_id, r])));
-      setReadings(new Map((readRes.data ?? []).map((r) => [r.reading_field_id, r])));
-      const counts: Record<string, number> = {};
-      for (const p of photoRes.data ?? []) if (p.checklist_item_id) counts[p.checklist_item_id] = (counts[p.checklist_item_id] ?? 0) + 1;
-      setPhotoCounts(counts);
-      setRules(rulesRes.data ?? []);
-      setEnforcePhotos((settingRes.data?.value as { enforce_photo_requirements?: boolean } | null)?.enforce_photo_requirements ?? true);
-      setError(null);
-    })()
+    const startedAt = writes.current;
+    chain.current = chain.current
+      .then(async () => {
+        const vd = await store.visitData(visitId);
+        if (!vd) throw new Error('This PM is not on the phone. Pull down on the PM list to sync.');
+        const [template, site, settings, rules] = await Promise.all([
+          store.template(vd.visit.template_id),
+          store.site(vd.visit.site_id),
+          store.settings(),
+          store.consistencyRules(),
+        ]);
+        if (!template) throw new Error('The checklist for this PM has not been downloaded yet. Connect to the Internet and sync.');
+        const sections = template.sections.filter((s) => s.is_active);
+        const loaded: Loaded = {
+          visit: vd.visit,
+          site: site ? { id: site.id, site_code: site.site_code, site_name: site.site_name } : null,
+          sections,
+          items: sections.flatMap((s) => s.items).filter((i) => i.is_active).sort((a, b) => a.sort_order - b.sort_order),
+          fields: sections.flatMap((s) => s.fields).filter((f) => f.is_active).sort((a, b) => a.sort_order - b.sort_order),
+          responses: new Map(vd.responses.map((r) => [r.checklist_item_id, { ...EMPTY_RESPONSE(r.checklist_item_id), ...r }])),
+          readings: new Map(vd.readings.map((r) => [r.reading_field_id, r])),
+          photos: vd.photos,
+          pendingKeys: vd.pendingKeys,
+          syncErrors: vd.errors,
+          enforcePhotos: settings.pm_submission?.enforce_photo_requirements ?? true,
+          rules,
+        };
+        // A newer edit was made while reading: a fresh read follows it, so skip this one.
+        if (!cancelled && writes.current === startedAt) {
+          setData(loaded);
+          setError(null);
+        }
+      })
       .catch((e: unknown) => {
-        if (!cancelled) setError(describeError(e));
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -114,174 +131,171 @@ export function usePmVisit(visitId: string): PmVisitModel {
     return () => {
       cancelled = true;
     };
-  }, [visitId, version]);
+  }, [store, visitId, revision, reloadKey, setData]);
 
+  const write = useCallback(
+    (fn: () => Promise<unknown>) => {
+      writes.current += 1;
+      const p = chain.current.then(fn);
+      chain.current = p.catch(() => undefined);
+      return p.then(
+        () => {
+          setSaveError(null);
+          changed();
+          return null;
+        },
+        (e: unknown) => {
+          const message = `Not saved on the phone: ${e instanceof Error ? e.message : String(e)}`;
+          setSaveError(message);
+          return message;
+        },
+      );
+    },
+    [changed],
+  );
+
+  const visit = data?.visit ?? null;
   const editable = visit != null && EDITABLE.includes(visit.status);
+
+  const photoCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of data?.photos ?? []) if (p.checklist_item_id) counts[p.checklist_item_id] = (counts[p.checklist_item_id] ?? 0) + 1;
+    return counts;
+  }, [data?.photos]);
 
   const state: ChecklistState = useMemo(
     () => ({
-      sections,
-      items,
-      readingFields: fields,
-      responses: [...responses.values()],
-      readings: [...readings.values()],
+      sections: data?.sections ?? [],
+      items: data?.items ?? [],
+      readingFields: data?.fields ?? [],
+      responses: [...(data?.responses.values() ?? [])],
+      readings: [...(data?.readings.values() ?? [])],
       photoCounts,
       notApplicableSections: visit?.not_applicable_sections ?? [],
-      enforcePhotoRequirements: enforcePhotos,
-      consistencyRules: rules,
+      enforcePhotoRequirements: data?.enforcePhotos ?? true,
+      consistencyRules: data?.rules ?? [],
     }),
-    [sections, items, fields, responses, readings, photoCounts, visit?.not_applicable_sections, enforcePhotos, rules],
+    [data, photoCounts, visit?.not_applicable_sections],
   );
   const progress = useMemo(() => visitProgress(state), [state]);
   const issues = useMemo(() => visitIssues(state), [state]);
 
-  const persist = useCallback(async (key: string, write: () => Promise<{ error: { message: string } | null }>) => {
-    setSaveState((s) => ({ ...s, [key]: 'saving' }));
-    const attempt = async () => {
-      const { error: err } = await write();
-      if (err) throw new Error(err.message);
+  const saveState = useMemo(() => {
+    const out: Record<string, SaveState> = {};
+    if (!data) return out;
+    const errorKeys = new Set(data.syncErrors.map((o) => o.key));
+    const mark = (id: string, key: string) => {
+      out[id] = errorKeys.has(key) ? 'error' : data.pendingKeys.has(key) ? 'pending' : 'sent';
     };
-    try {
-      await attempt();
-      failed.current.delete(key);
-      setSaveState((s) => ({ ...s, [key]: 'saved' }));
-      if (failed.current.size === 0) setSaveError(null);
-    } catch (e) {
-      failed.current.set(key, attempt);
-      setSaveState((s) => ({ ...s, [key]: 'error' }));
-      setSaveError(`Not saved: ${describeError(e)} Your answers are kept on this screen; tap "Retry" when online.`);
-    }
-  }, []);
-
-  // Latest values for building the next row outside React state updaters
-  // (updaters must stay pure; the save is a side effect).
-  const responsesRef = useRef(responses);
-  const readingsRef = useRef(readings);
-  useEffect(() => {
-    responsesRef.current = responses;
-    readingsRef.current = readings;
-  }, [responses, readings]);
+    for (const id of data.responses.keys()) mark(id, opKeys.response(visitId, id));
+    for (const id of data.readings.keys()) mark(id, opKeys.reading(visitId, id));
+    return out;
+  }, [data, visitId]);
 
   const setResponse = useCallback(
     (itemId: string, patch: Partial<ResponseRow>) => {
-      if (!supabase || !editable) return;
-      const client = supabase;
-      const row = { ...(responsesRef.current.get(itemId) ?? EMPTY_RESPONSE(itemId)), ...patch };
-      responsesRef.current = new Map(responsesRef.current).set(itemId, row);
-      setResponses(responsesRef.current);
-      void persist(itemId, async () =>
-        client
-          .from('pm_responses')
-          .upsert(responseUpsert(visitId, row, new Date().toISOString()), { onConflict: 'visit_id,checklist_item_id' }),
-      );
+      const data = dataRef.current;
+      if (!store || !editable || !data) return;
+      const row = { ...(data.responses.get(itemId) ?? EMPTY_RESPONSE(itemId)), ...patch };
+      setData({
+        ...data,
+        responses: new Map(data.responses).set(itemId, row),
+        pendingKeys: new Set(data.pendingKeys).add(opKeys.response(visitId, itemId)),
+      });
+      void write(() => store.saveResponse(visitId, row));
     },
-    [editable, persist, visitId],
+    [store, editable, visitId, write, setData],
   );
 
   const setReading = useCallback(
     (fieldId: string, patch: Partial<ReadingRow>) => {
-      if (!supabase || !editable) return;
-      const client = supabase;
-      const row = {
-        ...(readingsRef.current.get(fieldId) ?? { reading_field_id: fieldId, numeric_value: null, text_value: null }),
-        ...patch,
-      };
-      readingsRef.current = new Map(readingsRef.current).set(fieldId, row);
-      setReadings(readingsRef.current);
-      void persist(fieldId, async () =>
-        client
-          .from('pm_readings')
-          .upsert(readingUpsert(visitId, row, new Date().toISOString()), { onConflict: 'visit_id,reading_field_id' }),
-      );
+      const data = dataRef.current;
+      if (!store || !editable || !data) return;
+      const row = { ...(data.readings.get(fieldId) ?? { reading_field_id: fieldId, numeric_value: null, text_value: null }), ...patch };
+      setData({
+        ...data,
+        readings: new Map(data.readings).set(fieldId, row),
+        pendingKeys: new Set(data.pendingKeys).add(opKeys.reading(visitId, fieldId)),
+      });
+      void write(() => store.saveReading(visitId, row));
     },
-    [editable, persist, visitId],
+    [store, editable, visitId, write, setData],
   );
 
   const setSectionNotApplicable = useCallback(
     async (code: string, notApplicable: boolean) => {
-      if (!supabase || !visit) return;
-      const current = new Set(visit.not_applicable_sections);
+      const data = dataRef.current;
+      if (!store || !data || !editable) return;
+      const current = new Set(data.visit.not_applicable_sections);
       if (notApplicable) current.add(code);
       else current.delete(code);
       const list = [...current];
-      const { data, error: err } = await supabase
-        .from('pm_visits')
-        .update({ not_applicable_sections: list })
-        .eq('id', visitId)
-        .select('*')
-        .single();
-      if (err) setSaveError(`Could not update the section: ${describeError(new Error(err.message))}`);
-      else setVisit(data);
+      setData({ ...data, visit: { ...data.visit, not_applicable_sections: list } });
+      await write(() => store.updateVisit(visitId, { not_applicable_sections: list }));
     },
-    [visit, visitId],
+    [store, editable, visitId, write, setData],
   );
 
   const saveOverallComments = useCallback(
     async (text: string) => {
-      if (!supabase) return 'Not configured.';
-      const { data, error: err } = await supabase
-        .from('pm_visits')
-        .update({ overall_comments: text.trim() || null })
-        .eq('id', visitId)
-        .select('*')
-        .single();
-      if (err) return describeError(new Error(err.message));
-      setVisit(data);
-      return null;
+      const data = dataRef.current;
+      if (!store || !data) return 'The PM is not loaded.';
+      const overall_comments = text.trim() || null;
+      setData({ ...data, visit: { ...data.visit, overall_comments } });
+      return write(() => store.updateVisit(visitId, { overall_comments }));
     },
-    [visitId],
+    [store, visitId, write, setData],
   );
 
   const submit = useCallback(async () => {
-    if (!supabase) return 'Not configured.';
-    if (failed.current.size > 0) return 'Some answers are not saved yet. Tap "Retry" when you have Internet, then submit.';
-    const { data, error: err } = await supabase
-      .from('pm_visits')
-      .update({ status: 'SUBMITTED', ended_at: new Date().toISOString() })
-      .eq('id', visitId)
-      .select('*')
-      .single();
-    if (err) return describeError(new Error(err.message));
-    setVisit(data);
-    return null;
-  }, [visitId]);
+    const data = dataRef.current;
+    if (!store || !data) return 'The PM is not loaded.';
+    if (!editable) return 'This PM can no longer be edited.';
+    // Same rules the server applies; checked here so the technician can fix them on site.
+    if (issues.length > 0) return `${issues.length} item(s) still need attention before this PM can be submitted.`;
+    return write(() => store.submitVisit(visitId));
+  }, [store, editable, issues.length, visitId, write]);
 
-  const retryFailed = useCallback(() => {
-    for (const [key, attempt] of failed.current) {
-      void persist(key, async () => {
-        try {
-          await attempt();
-          return { error: null };
-        } catch (e) {
-          return { error: { message: describeError(e) } };
-        }
-      });
-    }
-  }, [persist]);
+  const removePhoto = useCallback(
+    async (photoId: string) => {
+      if (!store) return 'The PM is not loaded.';
+      try {
+        const files = await store.removeUnsentPhoto(photoId);
+        deleteFiles(files);
+        changed();
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      }
+    },
+    [store, deleteFiles, changed],
+  );
 
   return {
-    loading,
+    loading: loading || (!data && !error),
     error,
     visit,
-    site,
-    sections,
-    items,
-    fields,
-    responses,
-    readings,
+    site: data?.site ?? null,
+    sections: data?.sections ?? [],
+    items: data?.items ?? [],
+    fields: data?.fields ?? [],
+    responses: data?.responses ?? new Map(),
+    readings: data?.readings ?? new Map(),
+    photos: data?.photos ?? [],
     photoCounts,
-    enforcePhotos,
+    enforcePhotos: data?.enforcePhotos ?? true,
     progress,
     issues,
     editable,
     saveState,
+    syncErrors: data?.syncErrors ?? [],
     saveError,
     setResponse,
     setReading,
     setSectionNotApplicable,
     saveOverallComments,
     submit,
-    retryFailed,
-    reload: () => setVersion((v) => v + 1),
+    removePhoto,
+    reload: () => setReloadKey((k) => k + 1),
   };
 }

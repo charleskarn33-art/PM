@@ -48,6 +48,8 @@ function fixturesSql(): string {
     [ids.techB, 'tech.b@test.local', 'technician', true, ids.regionB],
     [ids.maintenance, 'maintenance@test.local', 'maintenance', true, null],
     [ids.inactiveTech, 'inactive@test.local', 'technician', true, ids.regionA],
+    [ids.supervisorC, 'supervisor.c@test.local', 'regional_supervisor', true, ids.regionC],
+    [ids.techC, 'tech.c@test.local', 'technician', true, ids.regionC],
   ];
 
   const userSql = users
@@ -63,7 +65,8 @@ function fixturesSql(): string {
   return `
     insert into public.regions (id, code, name) values
       ('${ids.regionA}', 'RA', 'Region A'),
-      ('${ids.regionB}', 'RB', 'Region B');
+      ('${ids.regionB}', 'RB', 'Region B'),
+      ('${ids.regionC}', 'RC', 'Region C');
     insert into public.clusters (id, region_id, code, name) values
       ('${ids.clusterA}', '${ids.regionA}', 'CA1', 'Cluster A1');
     insert into public.counties (id, cluster_id, code, name) values
@@ -71,27 +74,31 @@ function fixturesSql(): string {
 
     ${userSql}
 
-    insert into public.supervisors (id) values ('${ids.supervisorA}'), ('${ids.supervisorB}');
+    insert into public.supervisors (id) values ('${ids.supervisorA}'), ('${ids.supervisorB}'), ('${ids.supervisorC}');
     insert into public.technicians (id, region_id, supervisor_id) values
+      ('${ids.techC}', '${ids.regionC}', '${ids.supervisorC}'),
       ('${ids.techA}', '${ids.regionA}', '${ids.supervisorA}'),
       ('${ids.techB}', '${ids.regionB}', '${ids.supervisorB}'),
       ('${ids.inactiveTech}', '${ids.regionA}', '${ids.supervisorA}');
     insert into public.user_region_scopes (profile_id, region_id) values
       ('${ids.managerA}', '${ids.regionA}'),
       ('${ids.supervisorA}', '${ids.regionA}'),
-      ('${ids.supervisorB}', '${ids.regionB}');
+      ('${ids.supervisorB}', '${ids.regionB}'),
+      ('${ids.supervisorC}', '${ids.regionC}');
 
     -- T-A1 has every power source (all sections apply); T-A2 / T-B1 have none.
     insert into public.sites (id, site_code, site_name, region_id, county_id, latitude, longitude,
                               generator_available, battery_available, solar_available, supervisor_id) values
       ('${ids.siteA1}', 'T-A1', 'Test Site A1', '${ids.regionB}', '${ids.countyA}', 7.0, -11.0, true, true, true, '${ids.supervisorA}'),
       ('${ids.siteA2}', 'T-A2', 'Test Site A2', '${ids.regionA}', null, null, null, false, false, false, '${ids.supervisorA}'),
-      ('${ids.siteB1}', 'T-B1', 'Test Site B1', '${ids.regionB}', null, null, null, false, false, false, '${ids.supervisorB}');
+      ('${ids.siteB1}', 'T-B1', 'Test Site B1', '${ids.regionB}', null, null, null, false, false, false, '${ids.supervisorB}'),
+      ('${ids.siteC1}', 'S-C1', 'Sync Site C1', '${ids.regionC}', null, 8.0, -12.0, true, true, true, '${ids.supervisorC}');
 
     insert into public.site_assignments (site_id, technician_id) values
       ('${ids.siteA1}', '${ids.techA}'),
       ('${ids.siteB1}', '${ids.techB}'),
-      ('${ids.siteA1}', '${ids.inactiveTech}');
+      ('${ids.siteA1}', '${ids.inactiveTech}'),
+      ('${ids.siteC1}', '${ids.techC}');
 
     -- Deactivated after being assigned (assignments require an active technician).
     update public.profiles set is_active = false where id = '${ids.inactiveTech}';

@@ -37,11 +37,14 @@ export function readSql(path: string): string {
 export const ids = {
   regionA: '10000000-0000-4000-8000-00000000000a',
   regionB: '10000000-0000-4000-8000-00000000000b',
+  /** Region C is used only by the end-to-end sync test, which commits real data. */
+  regionC: '10000000-0000-4000-8000-00000000000c',
   clusterA: '20000000-0000-4000-8000-00000000000a',
   countyA: '30000000-0000-4000-8000-00000000000a',
   siteA1: '40000000-0000-4000-8000-0000000000a1',
   siteA2: '40000000-0000-4000-8000-0000000000a2',
   siteB1: '40000000-0000-4000-8000-0000000000b1',
+  siteC1: '40000000-0000-4000-8000-0000000000c1',
   admin: '50000000-0000-4000-8000-000000000001',
   viewer: '50000000-0000-4000-8000-000000000002',
   managerA: '50000000-0000-4000-8000-000000000003',
@@ -51,6 +54,8 @@ export const ids = {
   techB: '50000000-0000-4000-8000-000000000007',
   maintenance: '50000000-0000-4000-8000-000000000008',
   inactiveTech: '50000000-0000-4000-8000-000000000009',
+  supervisorC: '50000000-0000-4000-8000-00000000000c',
+  techC: '50000000-0000-4000-8000-0000000000c1',
 } as const;
 
 export type Client = pg.PoolClient;
@@ -163,4 +168,19 @@ export async function createVisitAs(
     [siteId, templateId, technicianId, status],
   );
   return rows[0]!.id;
+}
+
+/**
+ * Stores a photo the way the apps do: the file goes to storage first (as the
+ * current user, through the storage policies), then the metadata row.
+ */
+export async function addPhoto(
+  client: Client,
+  p: { siteId: string; visitId: string; itemId: string | null; path: string; ownerId: string },
+): Promise<void> {
+  await client.query(`insert into storage.objects (bucket_id, name, owner_id) values ('pm-photos', $1, $2)`, [p.path, p.ownerId]);
+  await client.query(
+    `insert into public.pm_photos (site_id, visit_id, checklist_item_id, file_path, taken_at) values ($1, $2, $3, $4, now())`,
+    [p.siteId, p.visitId, p.itemId, p.path],
+  );
 }

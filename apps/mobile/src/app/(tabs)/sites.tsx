@@ -1,39 +1,33 @@
 import { Link } from 'expo-router';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Banner, Card, EmptyState, LoadingView, StatusPill } from '@/components/ui';
-import { supabase } from '@/lib/supabase';
-import { useRemoteQuery } from '@/lib/use-remote-query';
+import { SyncBar } from '@/components/sync-bar';
+import type { Site } from '@/offline/types';
+import { useLocalQuery, useOffline } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
-const SITE_COLUMNS =
-  'id, site_code, site_name, status, is_demo, generator_available, solar_available, battery_available, grid_available, regions(name), counties(name)';
-
-async function fetchSites() {
-  if (!supabase) throw new Error('Not configured.');
-  const { data, error } = await supabase.from('sites').select(SITE_COLUMNS).order('site_name');
-  if (error) throw new Error(error.message);
-  return data;
-}
-
-type SiteRow = Awaited<ReturnType<typeof fetchSites>>[number];
-
 export default function SitesScreen() {
-  const query = useRemoteQuery(fetchSites, 'sites');
-  if (query.loading) return <LoadingView label="Loading sites…" />;
+  const { status, syncNow } = useOffline();
+  const query = useLocalQuery(async (store) => ({ sites: await store.sites(), hasData: await store.hasData() }), 'sites');
+  if (query.loading || !query.data) return <LoadingView label="Loading sites…" />;
 
   return (
     <FlatList
-      data={query.data ?? []}
+      data={[...query.data.sites].sort((a, b) => a.site_name.localeCompare(b.site_name))}
       keyExtractor={(s) => s.id}
       contentContainerStyle={styles.list}
-      refreshControl={<RefreshControl refreshing={query.refreshing} onRefresh={query.refresh} />}
-      ListHeaderComponent={query.error ? <Banner tone="danger" message={query.error} /> : null}
+      refreshControl={<RefreshControl refreshing={status.syncing} onRefresh={() => void syncNow()} />}
+      ListHeaderComponent={
+        <View style={{ gap: spacing.md }}>
+          <SyncBar />
+          {query.error ? <Banner tone="danger" message={query.error} /> : null}
+        </View>
+      }
       ListEmptyComponent={
-        query.error ? null : (
-          <EmptyState
-            title="No assigned sites"
-            message="Your supervisor has not assigned any sites to you yet."
-          />
+        query.data.hasData ? (
+          <EmptyState title="No assigned sites" message="Your supervisor has not assigned any sites to you yet." />
+        ) : (
+          <EmptyState title="Not downloaded yet" message="Connect to the Internet and pull down to download your sites." />
         )
       }
       renderItem={({ item }) => <SiteCard site={item} />}
@@ -41,7 +35,7 @@ export default function SitesScreen() {
   );
 }
 
-function SiteCard({ site }: { site: SiteRow }) {
+function SiteCard({ site }: { site: Site }) {
   const power = [
     site.generator_available && 'Generator',
     site.battery_available && 'Battery',
@@ -59,15 +53,12 @@ function SiteCard({ site }: { site: SiteRow }) {
             <Text style={styles.code}>{site.site_code}</Text>
             <View style={styles.pills}>
               {site.is_demo ? <StatusPill status="DEMO" tone="neutral" /> : null}
-              <StatusPill
-                status={site.status}
-                tone={site.status === 'ACTIVE' ? 'success' : 'neutral'}
-              />
+              {site.status ? <StatusPill status={site.status} tone={site.status === 'ACTIVE' ? 'success' : 'neutral'} /> : null}
             </View>
           </View>
           <Text style={styles.name}>{site.site_name}</Text>
           <Text style={styles.meta}>
-            {[site.regions?.name, site.counties?.name].filter(Boolean).join(' · ') ||
+            {[site.region_name, site.county_name].filter(Boolean).join(' · ') ||
               'Location not set'}
           </Text>
           <Text style={styles.meta}>Power: {power.length ? power.join(', ') : 'Not recorded'}</Text>

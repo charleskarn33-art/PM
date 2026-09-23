@@ -83,7 +83,7 @@ describe.skipIf(!postgrestBinary())('PostgREST API', () => {
     expect(regions.map((r) => r.code)).toEqual(expect.arrayContaining(['GCM', 'RA', 'RB']));
     expect(clusters.map((c) => c.code)).toEqual(['CA1']);
     expect(counties.map((c) => c.code)).toEqual(['CTA1']);
-    expect(supervisors.map((s) => s.name)).toEqual(['supervisor.a', 'supervisor.b']);
+    expect(supervisors.map((s) => s.name)).toEqual(['supervisor.a', 'supervisor.b', 'supervisor.c']);
   });
 
   it('web: site detail embeds and views resolve', async () => {

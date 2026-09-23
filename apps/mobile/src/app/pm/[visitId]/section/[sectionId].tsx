@@ -4,8 +4,10 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Banner, Card, LoadingView, PrimaryButton } from '@/components/ui';
 import { usePmVisitContext } from '@/pm/context';
+import { VisitSyncNotice } from '@/pm/sync-notice';
 import { ChoiceChips, NumberInput, Notice, SaveBadge, TextAnswer, YesNoNaButtons } from '@/pm/controls';
 import type { Item } from '@/pm/model';
+import { PhotoStrip } from '@/pm/photo-strip';
 import { SectionLiveSummary } from '@/pm/section-summary';
 import { colors, spacing } from '@/theme';
 
@@ -71,7 +73,7 @@ export default function SectionScreen() {
       case 'DATETIME':
         return <PrimaryButton title={r?.datetime_value ? new Date(r.datetime_value).toLocaleString() : 'Record current time'} variant="outline" onPress={() => pm.setResponse(item.id, { datetime_value: new Date().toISOString() })} />;
       case 'PHOTO':
-        return <Notice tone="info" text="Photo capture is added in Phase 5." />;
+        return null; // Photos are shown for every item below.
       default:
         return <TextAnswer label={item.prompt} value={r?.text_value ?? null} disabled={disabled} onCommit={(text_value) => pm.setResponse(item.id, { text_value })} />;
     }
@@ -85,12 +87,7 @@ export default function SectionScreen() {
           <Text style={styles.meta}>
             {p?.done ?? 0} of {p?.required ?? 0} required done{p?.failures ? ` · ${p.failures} failure(s)` : ''}
           </Text>
-          {pm.saveError ? (
-            <View style={{ gap: spacing.sm }}>
-              <Banner tone="danger" message={pm.saveError} />
-              <PrimaryButton title="Retry" variant="outline" onPress={pm.retryFailed} />
-            </View>
-          ) : null}
+          <VisitSyncNotice pm={pm} />
 
           <SectionLiveSummary category={section.category} pm={pm} />
           {pm.issues
@@ -158,8 +155,9 @@ export default function SectionScreen() {
                 {renderAnswer(item)}
                 {failed ? <Notice tone="danger" text={`Failure recorded (${item.failure_severity.toLowerCase()} severity).`} /> : null}
                 {needsPhoto ? (
-                  <Notice tone="warning" text={`Photo required${item.photo_instructions ? `: ${item.photo_instructions}` : ''}. Camera capture is added in Phase 5.`} />
+                  <Notice tone="warning" text={`Photo required${item.photo_instructions ? `: ${item.photo_instructions}` : ''}.`} />
                 ) : null}
+                {pm.editable || pm.photoCounts[item.id] ? <PhotoStrip pm={pm} itemId={item.id} sectionId={section.id} /> : null}
                 {showComment ? (
                   <View style={{ gap: spacing.xs }}>
                     <Text style={styles.meta}>{needsComment ? 'Comment / action taken (required)' : 'Comment'}</Text>

@@ -14,6 +14,7 @@
     "typescript": "5.9.3",
     "vitest": "^3.2.4",
     "@supabase/postgrest-js": "^2.117.0",
+    "@supabase/supabase-js": "^2.117.0",
     "@ipt/shared": "workspace:*"
   }
 }

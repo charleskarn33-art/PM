@@ -6,6 +6,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { LoadingView } from '@/components/ui';
 import { mobileEnv } from '@/lib/env';
 import { AuthProvider, useAuth } from '@/providers/auth-provider';
+import { OfflineProvider } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
 function RootNavigator() {
@@ -21,6 +22,15 @@ function RootNavigator() {
       <Stack.Protected guard={fieldUser}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="pm/[visitId]" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="sync"
+          options={{
+            headerShown: true,
+            title: 'Sync status',
+            headerStyle: { backgroundColor: colors.navy },
+            headerTintColor: colors.white,
+          }}
+        />
         <Stack.Screen
           name="site/[id]"
           options={{
@@ -57,8 +67,10 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <StatusBar style="dark" />
-        <RootNavigator />
+        <OfflineProvider>
+          <StatusBar style="dark" />
+          <RootNavigator />
+        </OfflineProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

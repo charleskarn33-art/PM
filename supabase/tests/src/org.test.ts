@@ -150,6 +150,7 @@ describe('overview views respect RLS', () => {
       expect(rows).toEqual([
         { full_name: 'supervisor.a', region_names: 'Region A', county_names: 'County A1', site_count: 2, technician_count: 2 },
         { full_name: 'supervisor.b', region_names: 'Region B', county_names: null, site_count: 1, technician_count: 1 },
+        { full_name: 'supervisor.c', region_names: 'Region C', county_names: null, site_count: 1, technician_count: 1 },
       ]);
     });
   });

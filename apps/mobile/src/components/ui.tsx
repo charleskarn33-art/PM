@@ -22,10 +22,12 @@ export function PrimaryButton({
   loading,
   variant = 'primary',
   accessibilityLabel,
+  disabled,
 }: {
   title: string;
   onPress: () => void;
   loading?: boolean;
+  disabled?: boolean;
   variant?: 'primary' | 'outline';
   accessibilityLabel?: string;
 }) {
@@ -34,13 +36,14 @@ export function PrimaryButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
-      accessibilityState={{ disabled: loading, busy: loading }}
-      disabled={loading}
+      accessibilityState={{ disabled: loading || disabled, busy: loading }}
+      disabled={loading || disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
         outline ? styles.buttonOutline : styles.buttonPrimary,
         (pressed || loading) && { opacity: 0.75 },
+        disabled && !loading && { opacity: 0.45 },
       ]}
     >
       {loading ? (

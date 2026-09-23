@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { actAs, activeTemplateId, createVisitAs, getPool, ids, inTx, itemId, tryQuery, type Client } from './db';
+import { actAs, activeTemplateId, addPhoto, createVisitAs, getPool, ids, inTx, itemId, tryQuery, type Client } from './db';
 
 afterAll(async () => {
   await getPool().end();
@@ -53,11 +53,13 @@ async function completeChecklist(c: Client, visitId: string) {
     [visitId],
   );
   // Fire extinguisher = YES requires a photo of the expiry date.
-  await c.query(
-    `insert into public.pm_photos (site_id, visit_id, checklist_item_id, file_path, taken_at)
-     values ($2, $1, $3, $4, now())`,
-    [visitId, ids.siteA1, await itemId(c, 'nt_fire_extinguisher'), `${visitId}/extinguisher.jpg`],
-  );
+  await addPhoto(c, {
+    siteId: ids.siteA1,
+    visitId,
+    itemId: await itemId(c, 'nt_fire_extinguisher'),
+    path: `${ids.siteA1}/${visitId}/extinguisher.jpg`,
+    ownerId: ids.techA,
+  });
 }
 
 describe('completion and failure count (server-computed)', () => {
@@ -196,10 +198,13 @@ describe('submission rules', () => {
       expect(issues.rows.map((r) => r.issue)).toEqual(['COMMENT_REQUIRED', 'PHOTO_REQUIRED']);
 
       await answer(c, visitId, 'gen_burning_oil', { answer: 'YES', comment: 'Blue smoke at load; oil level low.' });
-      await c.query(
-        `insert into public.pm_photos (site_id, visit_id, checklist_item_id, file_path, taken_at) values ($2, $1, $3, $4, now())`,
-        [visitId, ids.siteA1, await itemId(c, 'gen_burning_oil'), `${visitId}/oil.jpg`],
-      );
+      await addPhoto(c, {
+        siteId: ids.siteA1,
+        visitId,
+        itemId: await itemId(c, 'gen_burning_oil'),
+        path: `${ids.siteA1}/${visitId}/oil.jpg`,
+        ownerId: ids.techA,
+      });
       await c.query(`update public.pm_visits set status = 'SUBMITTED' where id = $1`, [visitId]);
       expect(await visitRow(c, visitId)).toMatchObject({ status: 'SUBMITTED', failure_count: 1, pct: 100 });
     });

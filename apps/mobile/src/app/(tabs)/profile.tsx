@@ -1,12 +1,30 @@
 import { ROLE_LABELS } from '@ipt/shared';
 import Constants from 'expo-constants';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SyncBar } from '@/components/sync-bar';
 import { Card, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/providers/auth-provider';
+import { useOffline } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
 export default function ProfileScreen() {
   const { profile, signOut } = useAuth();
+  const { status } = useOffline();
+
+  function confirmSignOut() {
+    if (status.outbox.pending === 0) {
+      void signOut();
+      return;
+    }
+    Alert.alert(
+      'Unsent PM work',
+      `${status.outbox.pending} change(s) have not reached the server yet. They stay on this phone and are sent when you sign in again with this account. Sign out anyway?`,
+      [
+        { text: 'Stay signed in', style: 'cancel' },
+        { text: 'Sign out', style: 'destructive', onPress: () => void signOut() },
+      ],
+    );
+  }
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Card>
@@ -15,11 +33,11 @@ export default function ProfileScreen() {
         <Row label="Role" value={profile ? ROLE_LABELS[profile.role] : '—'} />
         <Row label="Phone" value={profile?.phone || '—'} />
       </Card>
+      <SyncBar />
       <Card>
-        <Row label="Sync status" value="Online only (offline sync arrives in Phase 5)" />
         <Row label="App version" value={Constants.expoConfig?.version ?? 'unknown'} />
       </Card>
-      <PrimaryButton title="Sign out" variant="outline" onPress={() => void signOut()} />
+      <PrimaryButton title="Sign out" variant="outline" onPress={confirmSignOut} />
     </ScrollView>
   );
 }

@@ -1,6 +1,7 @@
 import type { Tables } from '@ipt/shared';
 import type { Session } from '@supabase/supabase-js';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { sessionStorage } from '@/lib/session-storage';
 import { supabase } from '@/lib/supabase';
 
 type Profile = Tables<'profiles'>;
@@ -12,9 +13,24 @@ interface AuthContextValue {
   session: Session | null;
   profile: Profile | null;
   profileError: string | null;
+  /** The profile shown is the copy saved on this phone (no connection when the app started). */
+  profileFromCache: boolean;
   signIn: (email: string, password: string) => Promise<string | null>;
   signOut: () => Promise<void>;
   reloadProfile: () => Promise<void>;
+}
+
+// Encrypted copy of the signed-in profile, so the field app opens without a connection.
+const PROFILE_CACHE_KEY = 'ipt.profile';
+
+async function readCachedProfile(userId: string): Promise<Profile | null> {
+  try {
+    const raw = await sessionStorage.getItem(PROFILE_CACHE_KEY);
+    const cached = raw ? (JSON.parse(raw) as Profile) : null;
+    return cached?.id === userId ? cached : null;
+  } catch {
+    return null;
+  }
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -31,11 +47,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileFromCache, setProfileFromCache] = useState(false);
 
   const loadProfile = useCallback(async (userId: string) => {
     if (!supabase) return;
     const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
     if (error) {
+      const offline = /network|fetch/i.test(error.message);
+      const cached = offline ? await readCachedProfile(userId) : null;
+      if (cached) {
+        setProfile(cached);
+        setProfileFromCache(true);
+        setProfileError(null);
+        return;
+      }
       setProfileError(
         /network|fetch/i.test(error.message)
           ? 'Unable to load your profile: no Internet connection.'
@@ -45,6 +70,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setProfileError(data ? null : 'No profile exists for this account. Contact your administrator.');
     setProfile(data);
+    setProfileFromCache(false);
+    if (data) await sessionStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(data)).catch(() => undefined);
+    else await sessionStorage.removeItem(PROFILE_CACHE_KEY).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -65,6 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!next) {
         setProfile(null);
         setProfileError(null);
+        setProfileFromCache(false);
+        void sessionStorage.removeItem(PROFILE_CACHE_KEY).catch(() => undefined);
       }
     });
     return () => {
@@ -95,8 +125,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [session, loadProfile]);
 
   const value = useMemo(
-    () => ({ status, session, profile, profileError, signIn, signOut, reloadProfile }),
-    [status, session, profile, profileError, signIn, signOut, reloadProfile],
+    () => ({ status, session, profile, profileError, profileFromCache, signIn, signOut, reloadProfile }),
+    [status, session, profile, profileError, profileFromCache, signIn, signOut, reloadProfile],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

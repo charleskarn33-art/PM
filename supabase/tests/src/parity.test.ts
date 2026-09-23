@@ -4,7 +4,7 @@
  */
 import { visitIssues, visitProgress, type ChecklistState } from '@ipt/shared';
 import { afterAll, describe, expect, it } from 'vitest';
-import { createVisitAs, getPool, ids, inTx, itemId, type Client } from './db';
+import { addPhoto, createVisitAs, getPool, ids, inTx, itemId, type Client } from './db';
 
 afterAll(async () => {
   await getPool().end();
@@ -80,10 +80,13 @@ describe('shared checklist rules match the database', () => {
           join public.pm_templates t on t.id = s.template_id and t.status = 'ACTIVE' where f.code = 'dc_modules_installed'`,
         [visitId],
       );
-      await c.query(
-        `insert into public.pm_photos (site_id, visit_id, checklist_item_id, file_path, taken_at) values ($1, $2, $3, $4, now())`,
-        [ids.siteA1, visitId, await itemId(c, 'nt_fire_extinguisher'), `${visitId}/fe.jpg`],
-      );
+      await addPhoto(c, {
+        siteId: ids.siteA1,
+        visitId,
+        itemId: await itemId(c, 'nt_fire_extinguisher'),
+        path: `${ids.siteA1}/${visitId}/fe.jpg`,
+        ownerId: ids.techA,
+      });
       await c.query(`update public.pm_visits set not_applicable_sections = '{SOLAR}' where id = $1`, [visitId]);
 
       const state = await loadState(c, visitId);

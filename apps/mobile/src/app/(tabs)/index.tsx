@@ -3,77 +3,64 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 import { Banner, Card, LoadingView } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { useRemoteQuery } from '@/lib/use-remote-query';
+import { SyncBar } from '@/components/sync-bar';
 import { useAuth } from '@/providers/auth-provider';
+import { useLocalQuery, useOffline } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
-interface HomeCounts {
-  sites: number;
-  openPm: number;
-  overduePm: number;
-  openActions: number;
-}
-
 export default function HomeScreen() {
-  const { profile } = useAuth();
+  const { profile, profileFromCache } = useAuth();
+  const { status, syncNow } = useOffline();
   const userId = profile?.id;
 
-  const query = useRemoteQuery<HomeCounts>(async () => {
-    if (!supabase || !userId) throw new Error('Not signed in.');
+  const local = useLocalQuery(async (store) => {
     const today = toIsoDate(new Date());
-    const [sites, schedules, actions] = await Promise.all([
-      supabase.from('sites').select('id', { count: 'exact', head: true }),
-      supabase
-        .from('pm_schedules')
-        .select('status, due_date')
-        .eq('technician_id', userId)
-        .in('status', [...OPEN_PM_STATUSES, 'REJECTED']),
-      supabase
-        .from('corrective_actions')
-        .select('id', { count: 'exact', head: true })
-        .eq('assigned_to', userId)
-        .in('status', ['OPEN', 'ASSIGNED', 'IN_PROGRESS']),
-    ]);
-    for (const r of [sites, schedules, actions]) if (r.error) throw new Error(r.error.message);
-    const rows = schedules.data ?? [];
+    const [sites, schedules] = await Promise.all([store.sites(), store.schedules()]);
+    const mine = schedules.filter((s) => s.technician_id === userId && [...OPEN_PM_STATUSES, 'REJECTED'].includes(s.status));
     return {
-      sites: sites.count ?? 0,
-      openPm: rows.length,
-      overduePm: rows.filter((s) => isPmOverdue(s.status, s.due_date, today)).length,
-      openActions: actions.count ?? 0,
+      sites: sites.length,
+      openPm: mine.length,
+      overduePm: mine.filter((s) => isPmOverdue(s.status, s.due_date, today)).length,
     };
   }, `home:${userId}`);
 
-  if (query.loading) return <LoadingView />;
+  // Corrective actions are not part of the offline copy yet (Phase 6); counted online when possible.
+  const actions = useRemoteQuery(async () => {
+    if (!supabase || !userId) throw new Error('Not signed in.');
+    const { count, error } = await supabase
+      .from('corrective_actions')
+      .select('id', { count: 'exact', head: true })
+      .eq('assigned_to', userId)
+      .in('status', ['OPEN', 'ASSIGNED', 'IN_PROGRESS']);
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  }, `home-actions:${userId}:${status.lastSyncedAt ?? ''}`);
 
-  const c = query.data;
+  if (local.loading) return <LoadingView />;
+  const c = local.data;
   return (
-    <ScrollView
-      contentContainerStyle={styles.container}
-      refreshControl={<RefreshControl refreshing={query.refreshing} onRefresh={query.refresh} />}
-    >
+    <ScrollView contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={status.syncing} onRefresh={() => void syncNow()} />}>
       <Text style={styles.hello}>Hello, {profile?.full_name || profile?.email}</Text>
       <Text style={styles.role}>{profile ? ROLE_LABELS[profile.role] : ''}</Text>
-      {query.error ? <Banner tone="danger" message={query.error} /> : null}
+      <SyncBar />
+      {profileFromCache ? <Banner tone="info" message="Working offline with the account details saved on this phone." /> : null}
+      {local.error ? <Banner tone="danger" message={local.error} /> : null}
       {c ? (
         <View style={styles.grid}>
           <Stat label="My sites" value={c.sites} />
           <Stat label="Open PMs" value={c.openPm} />
           <Stat label="Overdue PMs" value={c.overduePm} danger={c.overduePm > 0} />
-          <Stat label="My open actions" value={c.openActions} />
+          <Stat label="My open actions" value={actions.data ?? null} />
         </View>
       ) : null}
-      <Banner
-        tone="info"
-        message="This build requires an Internet connection. Offline PM, GPS check-in, photos and sync are delivered in upcoming phases."
-      />
     </ScrollView>
   );
 }
 
-function Stat({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
+function Stat({ label, value, danger }: { label: string; value: number | null; danger?: boolean }) {
   return (
     <Card style={styles.stat}>
-      <Text style={[styles.statValue, danger && { color: '#b91c1c' }]}>{value}</Text>
+      <Text style={[styles.statValue, danger && { color: '#b91c1c' }]}>{value ?? '—'}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </Card>
   );

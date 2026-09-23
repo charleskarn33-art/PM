@@ -15,7 +15,24 @@
       "package": "com.iptpowertech.pm",
       "edgeToEdgeEnabled": true
     },
-    "plugins": ["expo-router", "expo-secure-store", "expo-sqlite"],
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-sqlite",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "The camera is used to take PM evidence photos.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Your location is recorded when you start a PM to confirm you are at the site."
+        }
+      ]
+    ],
     "experiments": {
       "typedRoutes": true
     }

@@ -1,8 +1,9 @@
-import { humanizeStatus, PM_STATUS_TONE } from '@ipt/shared';
+import { formatDistance, humanizeStatus, PM_STATUS_TONE } from '@ipt/shared';
 import { Link, Stack } from 'expo-router';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { Banner, Card, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
+import { Banner, Card, LoadingView, StatusPill } from '@/components/ui';
 import { usePmVisitContext } from '@/pm/context';
+import { VisitSyncNotice } from '@/pm/sync-notice';
 import { ProgressBar } from '@/pm/controls';
 import { colors, spacing, toneColors } from '@/theme';
 
@@ -33,11 +34,14 @@ export default function PmVisitScreen() {
         {visit.status === 'REJECTED' && visit.review_comments ? (
           <Banner tone="danger" message={`Returned by supervisor: ${visit.review_comments}`} />
         ) : null}
-        {pm.saveError ? (
-          <View style={{ gap: spacing.sm }}>
-            <Banner tone="danger" message={pm.saveError} />
-            <PrimaryButton title="Retry" variant="outline" onPress={pm.retryFailed} />
-          </View>
+        <VisitSyncNotice pm={pm} />
+        {visit.gps_status ? (
+          <Banner
+            tone={visit.gps_status === 'WITHIN_RADIUS' ? 'success' : 'warning'}
+            message={`GPS check-in: ${humanizeStatus(visit.gps_status).toLowerCase()}${
+              visit.gps_distance_m != null ? ` (${formatDistance(visit.gps_distance_m)} from site, radius ${visit.gps_radius_m ?? '—'} m)` : ''
+            }${visit.outside_radius_reason ? ` — reason: ${visit.outside_radius_reason}` : ''}`}
+          />
         ) : null}
         <Card>
           <ProgressBar pct={pm.progress.completionPct} />

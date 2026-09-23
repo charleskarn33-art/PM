@@ -3,18 +3,13 @@ import { Stack, useLocalSearchParams } from 'expo-router';
 import { Linking, Platform, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Banner, Card, EmptyState, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
 import { mapsUrl, webMapsUrl } from '@/lib/maps';
-import { supabase } from '@/lib/supabase';
-import { useRemoteQuery } from '@/lib/use-remote-query';
+import { useLocalQuery, useOffline } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
 export default function SiteDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const query = useRemoteQuery(async () => {
-    if (!supabase) throw new Error('Not configured.');
-    const { data, error } = await supabase.from('site_overview').select('*').eq('id', id).maybeSingle();
-    if (error) throw new Error(error.message);
-    return data;
-  }, `site:${id}`);
+  const { status, syncNow } = useOffline();
+  const query = useLocalQuery((store) => store.site(id), `site:${id}`);
 
   if (query.loading) return <LoadingView label="Loading site…" />;
   const site = query.data;
@@ -54,7 +49,7 @@ export default function SiteDetailScreen() {
       <Stack.Screen options={{ title: site.site_code ?? 'Site' }} />
       <ScrollView
         contentContainerStyle={styles.container}
-        refreshControl={<RefreshControl refreshing={query.refreshing} onRefresh={query.refresh} />}
+        refreshControl={<RefreshControl refreshing={status.syncing} onRefresh={() => void syncNow()} />}
       >
         {query.error ? <Banner tone="danger" message={query.error} /> : null}
         <View>

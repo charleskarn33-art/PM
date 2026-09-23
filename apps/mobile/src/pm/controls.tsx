@@ -184,11 +184,11 @@ export function ChoiceChips({
 }
 
 export function SaveBadge({ state }: { state?: SaveState }) {
-  if (!state || state === 'idle') return null;
+  if (!state) return null;
   const map = {
-    saving: ['Saving…', toneColors.info],
-    saved: ['Saved', toneColors.success],
-    error: ['Not saved', toneColors.danger],
+    pending: ['Saved on phone', toneColors.info],
+    sent: ['Sent', toneColors.success],
+    error: ['Refused by server', toneColors.danger],
   } as const;
   const [label, tone] = map[state];
   return <Text style={[styles.save, { color: tone.fg }]}>{label}</Text>;
