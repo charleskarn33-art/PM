@@ -12,33 +12,45 @@ export type LatestReadingRow = Fn['analytics_latest_readings']['Returns'][number
 export type ComplianceGroup = 'region' | 'county' | 'technician' | 'supervisor' | 'month';
 export type FailureGroup = 'category' | 'severity' | 'month' | 'item' | 'site';
 
-function must<T>(label: string, r: { data: T | null; error: { message: string } | null }): T {
-  if (r.error) throw new Error(`Unable to load ${label}: ${r.error.message}`);
-  return (r.data ?? []) as T;
+/** PostgREST returns at most this many rows per request. */
+const PAGE = 1000;
+
+/**
+ * Runs an analytics function and returns every row: results larger than one
+ * response (e.g. latest readings for more than 1,000 sites) are fetched page
+ * by page. Each function orders its rows, so pages are stable.
+ */
+async function all<T>(
+  label: string,
+  page: (from: number, to: number) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const r = await page(from, from + PAGE - 1);
+    if (r.error) throw new Error(`Unable to load ${label}: ${r.error.message}`);
+    const data = (r.data ?? []) as T[];
+    rows.push(...data);
+    if (data.length < PAGE) return rows;
+  }
 }
 
 /** All figures are computed by the database as the signed-in user (RLS scope). */
 export async function loadCompliance(supabase: Client, from: string, to: string, group: ComplianceGroup, region: string | null) {
-  return must<ComplianceRow[]>(
-    'PM compliance',
-    await supabase.rpc('analytics_pm_compliance', { p_from: from, p_to: to, p_group: group, ...(region ? { p_region: region } : {}) }),
-  );
+  const args = { p_from: from, p_to: to, p_group: group, ...(region ? { p_region: region } : {}) };
+  return all<ComplianceRow>('PM compliance', (a, b) => supabase.rpc('analytics_pm_compliance', args).range(a, b));
 }
 
 export async function loadFailureStats(supabase: Client, from: string, to: string, group: FailureGroup, region: string | null) {
-  return must<FailureRow[]>(
-    'failure statistics',
-    await supabase.rpc('analytics_failures', { p_from: from, p_to: to, p_group: group, ...(region ? { p_region: region } : {}) }),
-  );
+  const args = { p_from: from, p_to: to, p_group: group, ...(region ? { p_region: region } : {}) };
+  return all<FailureRow>('failure statistics', (a, b) => supabase.rpc('analytics_failures', args).range(a, b));
 }
 
 export async function loadTechnicianStats(supabase: Client, from: string, to: string, region: string | null) {
-  return must<TechnicianRow[]>(
-    'technician performance',
-    await supabase.rpc('analytics_technicians', { p_from: from, p_to: to, ...(region ? { p_region: region } : {}) }),
-  );
+  const args = { p_from: from, p_to: to, ...(region ? { p_region: region } : {}) };
+  return all<TechnicianRow>('technician performance', (a, b) => supabase.rpc('analytics_technicians', args).range(a, b));
 }
 
 export async function loadLatestReadings(supabase: Client, region: string | null) {
-  return must<LatestReadingRow[]>('equipment readings', await supabase.rpc('analytics_latest_readings', region ? { p_region: region } : {}));
+  const args = region ? { p_region: region } : {};
+  return all<LatestReadingRow>('equipment readings', (a, b) => supabase.rpc('analytics_latest_readings', args).range(a, b));
 }

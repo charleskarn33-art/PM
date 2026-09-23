@@ -9,5 +9,5 @@
       "@/*": ["../../apps/web/src/*"]
     }
   },
-  "include": ["src/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "perf/**/*.ts", "vitest.config.ts", "vitest.perf.config.ts"]
 }

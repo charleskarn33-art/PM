@@ -1,8 +1,15 @@
 import type { NextRequest } from 'next/server';
+import { buildCsp, createNonce } from '@/lib/csp';
+import { publicEnv } from '@/lib/env';
 import { updateSession } from '@/lib/supabase/proxy';
 
 export async function proxy(request: NextRequest) {
-  return updateSession(request);
+  const nonce = createNonce();
+  const csp = buildCsp({ nonce, supabaseUrl: publicEnv().supabaseUrl, dev: process.env.NODE_ENV === 'development' });
+  // Next.js reads the nonce from the request's CSP header and applies it to its scripts.
+  const response = await updateSession(request, { 'x-nonce': nonce, 'Content-Security-Policy': csp });
+  response.headers.set('Content-Security-Policy', csp);
+  return response;
 }
 
 export const config = {

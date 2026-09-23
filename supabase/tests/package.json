@@ -5,7 +5,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "perf": "vitest run --config vitest.perf.config.ts"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

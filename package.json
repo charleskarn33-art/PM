@@ -18,7 +18,8 @@
     "format": "prettier --write .",
     "db:types": "node scripts/gen-db-types.mjs",
     "db:types:check": "node scripts/gen-db-types.mjs --check",
-    "tools:postgrest": "./scripts/fetch-postgrest.sh"
+    "tools:postgrest": "./scripts/fetch-postgrest.sh",
+    "test:e2e": "pnpm --filter @ipt/e2e run e2e"
   },
   "devDependencies": {
     "prettier": "^3.6.2",

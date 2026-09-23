@@ -72,7 +72,7 @@ cp apps/web/.env.example apps/web/.env.local   # set URL + publishable key
 pnpm dev:web                                   # http://localhost:3000
 ```
 
-Deploy on **Vercel**: root directory `apps/web`, framework Next.js, install command `pnpm install`, and environment variables `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SITE_URL` and (server-only, for invitations) `SUPABASE_SECRET_KEY`. Add the production URL to Supabase **Auth → URL configuration**.
+Deploy on **Vercel**: root directory `apps/web`, framework Next.js, install command `pnpm install`, and environment variables `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SITE_URL` (required in production: links in invitation and password-reset emails are built from it) and (server-only, for invitations) `SUPABASE_SECRET_KEY`. Add the production URL to Supabase **Auth → URL configuration**.
 
 PDF reports are rendered on the server (Node runtime, no extra service); they fetch the visit's photos through short-lived signed Storage URLs, so the server must be able to reach the Supabase URL.
 
@@ -117,7 +117,13 @@ pnpm tools:postgrest    # once: downloads PostgREST into .tools/ for the API tes
 pnpm test:db            # migrations + RLS + workflow tests on PostgreSQL, API tests via PostgREST
 pnpm db:types           # regenerate packages/shared/src/database.types.ts after changing migrations
 pnpm --filter @ipt/mobile bundle:check   # Metro Android bundle
+pnpm test:e2e           # browser tests (builds the web app; see below)
+pnpm --filter @ipt/db-tests perf         # performance benchmark (about 12 minutes; see below)
 ```
+
+**Browser tests** (`e2e/`, Playwright): the production web build runs against a fresh database (`ipt_pm_e2e`), the real PostgREST and a test gateway that stands in for Supabase Auth and Storage (`e2e/support/gateway.ts` — a test double, never deployed). They cover sign-in and redirects, every role's menu and forbidden pages, PM review, the failure → corrective action → verification flow, exports and the PDF, the audit log, site administration, and that every page works under the Content-Security-Policy. Needs `pnpm tools:postgrest` and a Chromium for Playwright (`pnpm --filter @ipt/e2e exec playwright install chromium`). `E2E_SKIP_BUILD=1` reuses the last e2e build while iterating on tests.
+
+**Performance benchmark** (`supabase/tests/perf/`): builds `ipt_pm_perf`, loads two years of monthly PM for 1,200 sites through the real triggers (about 26,000 PMs, 1.6 million answers, 300,000 audit entries — synthetic, never demo data) and times the web loaders, analytics and mobile sync through PostgREST as each role. `PERF_REUSE_DB=1` re-runs the timings on the last loaded database. Not part of CI (it takes about 12 minutes); run it after changing policies, views or analytics.
 
 `supabase/tests/src/mobile-sync.test.ts` runs the phone's real offline store and sync code against PostgREST end to end. Unlike the other API tests it commits data, so it uses its own region-C fixtures and deletes what it created. Storage uploads are simulated in that test (storage RLS still applies).
 

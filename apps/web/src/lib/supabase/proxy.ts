@@ -9,8 +9,14 @@ import { isPublicPath } from '@/lib/routes';
  * unauthenticated visitors to /login. Authorization (role / RLS) is enforced
  * by the database and re-checked in the portal layout.
  */
-export async function updateSession(request: NextRequest): Promise<NextResponse> {
-  let response = NextResponse.next({ request });
+export async function updateSession(request: NextRequest, requestHeaders: Record<string, string> = {}): Promise<NextResponse> {
+  // Pass the request on, with any extra headers for the app (e.g. the CSP nonce).
+  const forward = () => {
+    const headers = new Headers(request.headers);
+    for (const [k, v] of Object.entries(requestHeaders)) headers.set(k, v);
+    return NextResponse.next({ request: { headers } });
+  };
+  let response = forward();
   const { supabaseUrl, supabaseKey } = publicEnv();
 
   const supabase = createServerClient<Database>(supabaseUrl, supabaseKey, {
@@ -20,7 +26,7 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
       },
       setAll(cookiesToSet) {
         cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-        response = NextResponse.next({ request });
+        response = forward();
         cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
       },
     },

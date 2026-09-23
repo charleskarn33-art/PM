@@ -38,6 +38,8 @@ export function describeAuditEntry(action: string, metadata: Json): string {
     const label = d.name ?? d.code ?? d.site_code ?? d.failure_number ?? d.action_number ?? d.prompt ?? d.label ?? d.key;
     return label != null ? `Deleted ${fmt(label)}` : 'Deleted';
   }
+  // Status transitions (PM review, etc.): from → to, whatever order the keys come in.
+  if ('from' in m && 'to' in m) return `${fmt(m.from)} → ${fmt(m.to)}`;
   const rest = Object.entries(m).filter(([k]) => !k.endsWith('_id'));
   return rest.length ? rest.map(([k, v]) => `${col(k)}: ${fmt(v)}`).join('; ') : '';
 }
@@ -71,6 +73,11 @@ export function auditEntityHref(entityType: string | null, entityId: string | nu
 export function auditActionLabel(action: string): string {
   const verbs: Record<string, string> = { INSERT: 'created', UPDATE: 'changed', DELETE: 'deleted' };
   const m = action.match(/^(.*)_(INSERT|UPDATE|DELETE)$/);
-  const words = (s: string) => s.toLowerCase().replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+  const words = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/_/g, ' ')
+      .replace(/\bpm\b/g, 'PM')
+      .replace(/^\w/, (c) => c.toUpperCase());
   return m ? `${words(m[1]!)} ${verbs[m[2]!]}` : words(action);
 }

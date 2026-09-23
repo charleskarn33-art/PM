@@ -90,6 +90,11 @@ export function supabaseTransport(client: Client, readFile: ReadFile): SyncTrans
     },
 
     async uploadPhoto({ row, local_uri, thumb_uri }: PhotoUploadPayload) {
+      // Already recorded (an earlier attempt succeeded but its response was lost):
+      // done. The stored file is evidence from then on and cannot be replaced.
+      const existing = await call(client.from('pm_photos').select('id').eq('id', row.id).maybeSingle());
+      if (existing.error && fail(existing).kind === 'network') throw fail(existing);
+      if (existing.data) return;
       // Files first: the metadata row is refused until the file exists in storage.
       const bucket = client.storage.from('pm-photos');
       const files: [string, string][] = [[row.file_path, local_uri]];

@@ -71,6 +71,12 @@ describe('routes', () => {
     expect(safeNextPath('/\\evil.example')).toBe('/dashboard');
     expect(safeNextPath('/login')).toBe('/dashboard');
     expect(safeNextPath(undefined)).toBe('/dashboard');
+    // Characters browsers strip or rewrite, which would turn the path into //host.
+    expect(safeNextPath('/\t/evil.example')).toBe('/dashboard');
+    expect(safeNextPath('/\n/evil.example')).toBe('/dashboard');
+    expect(safeNextPath('/%09/evil.example')).toBe('/%09/evil.example'); // stays an encoded same-site path
+    expect(safeNextPath('/login/../dashboard')).toBe('/dashboard');
+    expect(safeNextPath('/visits?status=ALL#top')).toBe('/visits?status=ALL#top');
   });
 });
 

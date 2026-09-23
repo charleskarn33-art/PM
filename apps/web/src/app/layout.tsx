@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from 'next';
+import { connection } from 'next/server';
 import { Inter } from 'next/font/google';
 import './globals.css';
 
@@ -13,7 +14,9 @@ export const viewport: Viewport = {
   themeColor: '#0b1f3a',
 };
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  // Render per request so every page's scripts carry that request's CSP nonce.
+  await connection();
   return (
     <html lang="en" className={inter.variable}>
       <body className="min-h-screen font-sans">{children}</body>

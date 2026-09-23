@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { auditActionLabel, auditEntityHref, describeAuditEntry } from './audit';
 
 describe('audit log presentation', () => {
+  it('shows a status transition as from → to', () => {
+    expect(describeAuditEntry('PM_REJECTED', { to: 'REJECTED', from: 'SUBMITTED', site_id: 'x' })).toBe('SUBMITTED → REJECTED');
+  });
+
   it('summarises changes, records, deletions and reports', () => {
     expect(describeAuditEntry('REGION_UPDATE', { changes: { name: { from: 'New Region', to: 'Renamed' }, is_active: { from: true, to: false } } })).toBe(
       'name: New Region → Renamed; is active: true → false',
@@ -22,5 +26,7 @@ describe('audit log presentation', () => {
   it('labels actions in plain words', () => {
     expect(auditActionLabel('SITE_ASSIGNMENT_INSERT')).toBe('Site assignment created');
     expect(auditActionLabel('USER_ROLE_CHANGED')).toBe('User role changed');
+    expect(auditActionLabel('PM_REJECTED')).toBe('PM rejected');
+    expect(auditActionLabel('PM_SECTION_INSERT')).toBe('PM section created');
   });
 });

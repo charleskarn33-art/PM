@@ -140,7 +140,7 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 | 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | **Done** (push needs deployment setup) |
 | 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | **Done** |
 | 8 | PDF reports, CSV/Excel export, audit log UI | **Done** |
-| 9 | Test expansion (E2E), security audit, performance, device testing | Planned |
+| 9 | Test expansion (E2E), security audit, performance, device testing | **Done** (device run pending hardware — see DEVICE_TESTING.md) |
 | 10 | Production deployment (Supabase, Vercel, EAS) | Planned |
 
 ## Phase status
@@ -238,6 +238,31 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 - **Audit log** (migration `…1500_audit_log.sql`, Super Admin only): row changes now record *what* changed — new records' identifying fields, `{column: {from, to}}` for updates (updates that only touch timestamps are skipped), and a snapshot of deleted rows; long values are shortened in the log. The log is **append-only** for everyone including server code (a trigger rejects update/delete). `/admin/audit` lists entries with person, role, action, record (linked where it still exists) and readable details, filterable by text, action, record type and date, with CSV export.
 - Fix across all paged lists: a page number past the end (an old link, or after filters shrink the list) now returns to page 1 instead of an error page, and exports whose size is an exact multiple of 1,000 rows no longer fail on the last page.
 - Tests: audit detail, append-only and admin-only access against the database; API tests for the report data, exports and audit queries; unit tests for report formatting, audit summaries and paging; browser checks of the PDF (content and page layout), every export, the Reports and Audit pages, access per role (supervisor → 404 on audit, technician → own PDF only, bad / missing visit → 400 / 404) and phone width.
+
+### Phase 9 — delivered
+
+- **Browser tests** (`e2e/`, Playwright, 26 tests, run in CI): the production web build against a fresh database, the real PostgREST and a test gateway standing in for Supabase Auth/Storage. Covers sign-in (wrong password, return to the requested page, crafted return addresses, sign-out, deactivated accounts), every role's menu and the pages each role must not reach, PM review (return with a reason, approve the resubmission, other regions locked out, PDF download), failure → corrective action → maintenance completes → supervisor verifies (with the failure status following), a filtered CSV export, the Reports page, the audit log, adding a site, and that every page renders under the Content-Security-Policy without script errors.
+- **Security review** (`docs/SECURITY.md`; migration `…1600_security_hardening.sql`). Fixed:
+  - an open redirect after sign-in (`/\t/evil.example` became `//evil.example` in browsers);
+  - photo evidence could be overwritten by its uploader after submission (storage upsert) — now locked once the photo is recorded; the phone checks before retrying;
+  - app users held TRUNCATE (bypasses RLS and the audit log's append-only guard), REFERENCES and TRIGGER on every table, write grants on views and `setval` on the numbering sequences — revoked;
+  - report audit entries could carry unbounded data — bounded;
+  - auth email links fell back to the request's Host header when `SITE_URL` was unset — production now requires `SITE_URL`.
+  Added a nonce-based Content-Security-Policy and HSTS. A catalog test suite (`security.test.ts`) fails if a later migration regresses any of these (definer functions without `search_path`, anon access, tables without policies, definer views, writable views, dangerous grants, an unreviewed public SECURITY DEFINER function).
+- **Performance** (`supabase/tests/perf/`): a 1,200-site, two-year data set (26,000 PMs, 1.6 million answers, 290,000 audit entries) loaded through the real triggers, and a benchmark of every web loader, analytics function and the mobile sync download through PostgREST per role. Found and fixed (migration `…1800_rls_performance.sql`):
+  - a supervisor's or manager's PM visit list took **16.6 s** — RLS policies ran a query per row for rows outside their region; now set-based: **46 ms** (same rules; photos 1.8 s → 66 ms);
+  - technician performance **0.9 s → 31 ms** (grouped aggregates instead of per-technician sub-queries);
+  - analytics results were silently cut at PostgREST's 1,000-row response limit (e.g. latest readings for 1,205 sites showed 1,000) — now paged.
+  After the fixes every case is under 400 ms (median); slowest: latest readings for all 1,200 sites (0.39 s), mobile sync download (0.37 s), sites list filtered by overdue PM (0.33 s).
+- Found by the browser tests: a supervisor could not see the name of the Maintenance user they had assigned work to (migration `…1700_profile_visibility.sql`); the audit log now shows status changes as `SUBMITTED → REJECTED` and "PM" labels correctly.
+- **Device testing**: a step-by-step plan for real phones (`docs/DEVICE_TESTING.md`) — **not run** here (no device or emulator in this environment).
+
+### Known limitations after Phase 9
+
+- The mobile app has not been run on a physical device or emulator; camera, GPS, SecureStore, push delivery and app-lifecycle behaviour must be checked with `docs/DEVICE_TESTING.md` before release.
+- Browser tests sign in through a test stand-in for Supabase Auth; the hosted Auth service (password rules, rate limits, emails) is exercised only in a real project.
+- Two moderate advisories in Expo's dependency tree are accepted (see `docs/SECURITY.md`); re-check on each Expo SDK upgrade.
+- Benchmarks are from a development container; production numbers depend on the Supabase plan. The performance run is manual (not in CI).
 
 ### Known limitations after Phase 8
 

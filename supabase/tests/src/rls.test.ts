@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { actAs, activeTemplateId, getPool, ids, inTx, tryQuery, type Client } from './db';
+import { actAs, activeTemplateId, addPhoto, createVisitAs, getPool, ids, inTx, relaxRequirements, tryQuery, type Client } from './db';
 
 afterAll(async () => {
   await getPool().end();
@@ -120,6 +120,49 @@ describe('write permissions on organisation data', () => {
   });
 });
 
+describe('PM data behind a corrective action', () => {
+  it('maintenance reads the PM, answers, readings, photos and notes of their action — and nothing else', async () => {
+    await inTx(async (c) => {
+      const visitId = await createVisitAs(c, ids.techA, ids.siteA1);
+      const other = await createVisitAs(c, ids.techA, ids.siteA1);
+      for (const v of [visitId, other]) {
+        await c.query(
+          `insert into public.pm_responses (visit_id, checklist_item_id, prompt_snapshot, answer)
+           select $1, i.id, '', 'YES' from public.pm_checklist_items i join public.pm_sections s on s.id = i.section_id
+             join public.pm_templates t on t.id = s.template_id and t.status = 'ACTIVE' where i.code = 'gen_radiator'`,
+          [v],
+        );
+      }
+      await addPhoto(c, { siteId: ids.siteA1, visitId, itemId: null, path: `${ids.siteA1}/${visitId}/m.jpg`, ownerId: ids.techA });
+      await relaxRequirements(c);
+      await actAs(c, ids.techA);
+      await c.query(`update public.pm_visits set status = 'SUBMITTED' where id = any($1)`, [[visitId, other]]);
+      await actAs(c, ids.supervisorA);
+      const action = (
+        await c.query(
+          `insert into public.corrective_actions (site_id, visit_id, category, description, assigned_to) values ($1, $2, 'GENERATOR', 'Fix', $3) returning id`,
+          [ids.siteA1, visitId, ids.maintenance],
+        )
+      ).rows[0].id;
+      await c.query(`insert into public.corrective_action_updates (corrective_action_id, note) values ($1, 'Parts ordered')`, [action]);
+
+      await actAs(c, ids.maintenance);
+      const count = async (sql: string) => Number((await c.query(sql)).rows[0].n);
+      expect(await count(`select count(*) n from public.pm_visits`)).toBe(1);
+      expect(await count(`select count(*) n from public.pm_visits where id = '${visitId}'`)).toBe(1);
+      expect(await count(`select count(*) n from public.pm_responses where visit_id = '${other}'`)).toBe(0);
+      expect(await count(`select count(*) n from public.pm_responses where visit_id = '${visitId}'`)).toBe(1);
+      expect(await count(`select count(*) n from public.pm_photos where visit_id = '${visitId}'`)).toBe(1);
+      expect(await count(`select count(*) n from public.corrective_action_updates where corrective_action_id = '${action}'`)).toBe(1);
+
+      // Another region's supervisor sees none of it.
+      await actAs(c, ids.supervisorB);
+      expect(await count(`select count(*) n from public.pm_responses where visit_id = '${visitId}'`)).toBe(0);
+      expect(await count(`select count(*) n from public.corrective_action_updates where corrective_action_id = '${action}'`)).toBe(0);
+    });
+  });
+});
+
 describe('profiles and roles', () => {
   it('users cannot change their own role or activation', async () => {
     await inTx(async (c) => {
@@ -136,6 +179,26 @@ describe('profiles and roles', () => {
       await actAs(c, ids.techA);
       const { rows } = await c.query<{ id: string }>(`select id from public.profiles order by id`);
       expect(rows.map((r) => r.id)).toEqual([ids.supervisorA, ids.techA]);
+    });
+  });
+
+  it('supervisor sees who they assigned work to; the assignee sees who assigned it', async () => {
+    await inTx(async (c) => {
+      const visible = async (who: string, id: string) => {
+        await actAs(c, who);
+        return (await c.query(`select 1 from public.profiles where id = $1`, [id])).rowCount;
+      };
+      expect(await visible(ids.supervisorA, ids.maintenance)).toBe(0);
+      expect(await visible(ids.maintenance, ids.supervisorA)).toBe(0);
+      await actAs(c, ids.supervisorA);
+      await c.query(
+        `insert into public.corrective_actions (site_id, category, description, assigned_to) values ($1, 'GENERATOR', 'Fix it', $2)`,
+        [ids.siteA1, ids.maintenance],
+      );
+      expect(await visible(ids.supervisorA, ids.maintenance)).toBe(1);
+      expect(await visible(ids.maintenance, ids.supervisorA)).toBe(1);
+      // Other regions still do not see them.
+      expect(await visible(ids.supervisorB, ids.maintenance)).toBe(0);
     });
   });
 
@@ -228,6 +291,19 @@ describe('storage object policies', () => {
       expect((await c.query(mine)).rowCount).toBe(1);
       await actAs(c, ids.supervisorB);
       expect((await c.query(mine)).rowCount).toBe(0);
+    });
+  });
+
+  it('uploader can retry a photo upload only until the photo is recorded', async () => {
+    await inTx(async (c) => {
+      const visitId = await createVisitAs(c, ids.techA, ids.siteA1);
+      const pending = `${ids.siteA1}/${visitId}/pending.jpg`;
+      const recorded = `${ids.siteA1}/${visitId}/recorded.jpg`;
+      await c.query(insertObject, ['pm-photos', pending, ids.techA]);
+      await addPhoto(c, { siteId: ids.siteA1, visitId, itemId: null, path: recorded, ownerId: ids.techA });
+      const touch = `update storage.objects set metadata = '{"retry": true}' where name = $1`;
+      expect((await tryQuery(c, touch, [pending])).rowCount).toBe(1);
+      expect((await tryQuery(c, touch, [recorded])).rowCount).toBe(0);
     });
   });
 

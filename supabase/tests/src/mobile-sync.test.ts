@@ -272,6 +272,25 @@ describe.skipIf(!postgrestBinary())('mobile offline sync end to end (real API)',
     await migrate(again.db);
     await again.engine.run();
     expect((await again.store.visit(visitId))?.status).toBe('SUBMITTED');
+
+    // A photo whose row is already recorded (its response was lost) is not
+    // uploaded again: the stored file is evidence and storage refuses overwrites.
+    const recorded = (await getPool().query('select * from public.pm_photos where visit_id = $1 limit 1', [visitId])).rows[0];
+    const storageCalls: string[] = [];
+    const token = signJwt(USER);
+    const noStorage: typeof fetch = async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      if (url.pathname.startsWith('/storage/')) storageCalls.push(url.pathname);
+      return makeFetch(USER, { offline: false })(input, init);
+    };
+    const client = createClient<Database>(API, token, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      db: { retry: false },
+      global: { fetch: noStorage, headers: { Authorization: `Bearer ${token}` } },
+    });
+    const transport = supabaseTransport(client, async () => new ArrayBuffer(1));
+    await transport.uploadPhoto({ row: recorded, local_uri: 'file:///gone.jpg', thumb_uri: null } as never);
+    expect(storageCalls).toEqual([]);
   });
 
   it('the server’s refusal is kept for the technician and holds that PM’s later changes', async () => {
