@@ -40,6 +40,23 @@
   --neutral: #475569;
   --neutral-soft: #e2e8f0;
 
+  /* Charts (validated categorical order; status colours are reserved for states). */
+  --chart-surface: #ffffff;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+  --chart-muted: #6b6a66;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --seq-250: #86b6ef;
+  --seq-450: #2a78d6;
+  --seq-600: #184f95;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  --status-neutral: #a3a29c;
+
   --sidebar: #0b1f3a;
   --sidebar-foreground: #c9d4e5;
   --sidebar-active: #13305a;

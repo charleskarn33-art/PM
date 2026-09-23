@@ -138,7 +138,7 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 | 4 | Section modules (Generator, DC, Battery, Solar, Non-Technical, Earthing) incl. analytics projections and DC phase currents; Tienii demo visit + readings | **Done** (except the Tienii demo visit — needs the report values) |
 | 5 | Photos, GPS/geofence, offline SQLite store, outbox sync, Settings | **Done** |
 | 6 | Failure creation on submission, corrective action workflow UI, notifications (in-app + push) | **Done** (push needs deployment setup) |
-| 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | Planned |
+| 7 | Dashboards/analytics (region/county/technician/supervisor, DC load, battery, generator) | **Done** |
 | 8 | PDF reports, CSV/Excel export, audit log UI | Planned |
 | 9 | Test expansion (E2E), security audit, performance, device testing | Planned |
 | 10 | Production deployment (Supabase, Vercel, EAS) | Planned |
@@ -214,6 +214,27 @@ A row has unsent changes exactly when an outbox operation with its key exists �
 - Web: **Failures** (filters, detail with evidence photos, create corrective action with assignee/priority/due date, severity, close with note / reopen, report a manual failure), **Corrective Actions** (filters incl. overdue and "assigned to me"; detail with start/complete for the assignee, verify / return with note / close / edit / close-with-reason for supervisors, notes, timeline, photos), **notification bell** with unread count and a **Notifications** page (mark read / all read, links to the item), failures raised shown on the PM review page.
 - Mobile: corrective actions in the offline copy (local schema v2): **Actions** tab and action screen (start work, notes, photos, complete with what was done), all queued and sent in order like PM work; **Notifications** screen with unread bell in the header (marking read works offline); push registration on sign-in with the status shown on Profile, tapping a push opens the related screen, and sign-out unregisters the phone.
 - Tests: 14 DB tests for failures, workflow, notifications, push tokens and the bundle; API tests for the new screens' queries; offline store tests for actions and notifications (including a v1 → v2 local database upgrade); push message building; end-to-end phone sync of a corrective action through the real API (start, note, photo, completion, notification read, harmless resend after verification).
+
+### Phase 7 — delivered
+
+- Database (migration `…1400_analytics.sql`), all SECURITY INVOKER so every figure is limited to the caller's RLS scope:
+  - `analytics_pm_compliance(from, to, group, region?)` — PMs **due** in the period grouped by region, county, technician, supervisor or month: due, completed (submitted or approved), completed on time (submitted by the due date), overdue.
+  - `analytics_failures(from, to, group, region?)` — failures **detected** in the period by section, severity, month, checklist item or site: found, not yet verified, critical, average hours from detection to resolution (resolved ones only).
+  - `analytics_technicians(from, to, region?)` — per active technician: PMs submitted / approved / returned / awaiting review, average PM duration, failures found, corrective actions assigned / completed / overdue.
+  - `analytics_latest_readings(region?)` — latest recorded readings per site from **submitted or approved** PMs only: DC voltage, load current, calculated kW, modules, phase count / min / max / total; generator running hours, fuel, oil pressure, kVA, service needed; battery voltage, capacity, strings, damage, water top-up; solar panels; earthing abnormalities.
+- Web: **Analytics** (Super Admin, Regional Manager, Regional Supervisor, Viewer) with one filter row (period presets — this month, last 3 / 12 months, year to date, custom range — and region) and four tabs:
+  - *Overview*: KPI row (compliance, on time, overdue, failures, average time to resolve, critical), compliance by month (line), PMs due vs completed by month (columns), compliance by region, failures by section and by severity.
+  - *Technicians & supervisors*: on-time completion by technician, technician performance table, compliance by supervisor and by county.
+  - *Failures*: found vs not yet verified by month, most frequent failing items, sites with the most failures (linked).
+  - *Equipment*: DC load by site with the configured high-load flag, phase imbalance (information only), generators, batteries, solar and earthing.
+  - Every chart has a **table view** with the same numbers; charts use a validated colour order (checked for colour-vision deficiencies), status colours only for states (severity), hover tooltips, one axis per chart, and a linear line (no smoothing that would suggest values never recorded). Empty periods say so instead of drawing zero charts. The dashboard links to Analytics.
+- Tests: analytics functions against the database (grouping, on-time/overdue logic, scope per role, submitted-only readings, anonymous denied), API tests of every loader and grouping, unit tests for the period presets, month buckets and phase imbalance; browser checks of all four tabs, tooltip, invalid custom range and phone width.
+
+### Known limitations after Phase 7
+
+- "Returned" counts PMs that are **currently** sent back; a PM that was returned and later approved counts as approved (the full review history is in the audit log, which only Super Admins read).
+- Analytics are web-only; the phone shows the technician's own work lists, not trend charts.
+- Figures are computed on request from live tables; at much larger data volumes, materialised summaries may be needed (Phase 9 performance work).
 
 ### Known limitations after Phase 6
 

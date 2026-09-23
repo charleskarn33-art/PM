@@ -1,4 +1,4 @@
-import { PM_CATEGORY_LABELS, ROLE_LABELS } from '@ipt/shared';
+import { can, PM_CATEGORY_LABELS, ROLE_LABELS } from '@ipt/shared';
 import {
   BatteryCharging,
   CalendarCheck,
@@ -18,6 +18,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { KpiCard } from '@/components/kpi-card';
 import { Alert } from '@/components/ui/alert';
 import { requireSession } from '@/lib/auth';
@@ -59,7 +60,17 @@ export default async function DashboardPage() {
             {ROLE_LABELS[session.role]} · {scopeText}
           </p>
         </div>
-        <p className="text-sm text-muted-foreground">PM period: {data.period.label}</p>
+        <p className="text-sm text-muted-foreground">
+          PM period: {data.period.label}
+          {can(session.role, 'view_reports') ? (
+            <>
+              {' · '}
+              <Link href="/analytics" className="text-info hover:underline">
+                Trends and analytics
+              </Link>
+            </>
+          ) : null}
+        </p>
       </div>
 
       {data.sites.demo > 0 ? (

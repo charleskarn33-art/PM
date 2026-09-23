@@ -55,7 +55,7 @@ export const NAVIGATION: NavSection[] = [
   {
     title: 'Insights',
     items: [
-      { label: 'Analytics', href: '/analytics', icon: 'analytics', capability: 'view_reports', plannedPhase: 7 },
+      { label: 'Analytics', href: '/analytics', icon: 'analytics', capability: 'view_reports' },
       { label: 'Reports', href: '/reports', icon: 'reports', capability: 'view_reports', plannedPhase: 8 },
     ],
   },

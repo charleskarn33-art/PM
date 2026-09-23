@@ -9,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import { loadDashboard, monthPeriod } from '@/lib/dashboard';
 import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
+import { loadCompliance, loadFailureStats, loadLatestReadings, loadTechnicianStats } from '@/lib/analytics';
 import { loadActionDetail } from '@/lib/corrective-actions';
 import { canManageSite, loadAssignees, loadFailureDetail } from '@/lib/failures';
 import { loadVisitAnalytics, loadVisitDetail, signPhotoUrls } from '@/lib/pm-visit';
@@ -337,6 +338,28 @@ describe.skipIf(!postgrestBinary())('PostgREST API', () => {
       expect(r.error).toBeNull();
       const t = await apiAs(ids.techA).rpc('return_corrective_action', { p_action_id: missing, p_note: 'nope' });
       expect(t.error?.message).toMatch(/Only a completed corrective action/);
+    });
+  });
+
+  describe('Phase 7: analytics', () => {
+    it('web: every analytics loader resolves for each grouping, with and without a region', async () => {
+      const api = as(ids.supervisorA);
+      const from = '2026-01-01';
+      const to = '2026-12-31';
+      for (const g of ['region', 'county', 'technician', 'supervisor', 'month'] as const) {
+        expect(Array.isArray(await loadCompliance(api, from, to, g, null))).toBe(true);
+      }
+      for (const g of ['category', 'severity', 'month', 'item', 'site'] as const) {
+        expect(Array.isArray(await loadFailureStats(api, from, to, g, ids.regionA))).toBe(true);
+      }
+      const techs = await loadTechnicianStats(api, from, to, null);
+      expect(techs.map((t) => t.technician_name)).toContain('tech.a');
+      expect(Array.isArray(await loadLatestReadings(api, ids.regionA))).toBe(true);
+    });
+
+    it('analytics are not available anonymously', async () => {
+      const r = await apiAs(null).rpc('analytics_latest_readings', {});
+      expect(r.error).not.toBeNull();
     });
   });
 });

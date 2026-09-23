@@ -2936,6 +2936,38 @@ export type Database = {
         };
         Returns: Database['public']['Tables']['profiles']['Row'];
       };
+      analytics_failures: {
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_group: string;
+          p_region?: string;
+        };
+        Returns: { group_key: string; group_label: string; total: number; open: number; critical: number; avg_resolution_hours: number }[];
+      };
+      analytics_latest_readings: {
+        Args: {
+          p_region?: string;
+        };
+        Returns: { site_id: string; site_code: string; site_name: string; region_name: string; is_demo: boolean; dc_recorded_at: string; rectifier_voltage_v: number; load_current_a: number; dc_power_kw: number; dc_modules_installed: number; dc_modules_operational: number; phase_count: number; phase_min_a: number; phase_max_a: number; phase_total_a: number; gen_recorded_at: string; running_hours: number; fuel_level_pct: number; oil_pressure_bar: number; generator_kva: number; generator_requires_service: boolean; battery_recorded_at: string; battery_voltage_v: number; battery_capacity_ah: number; battery_string_count: number; battery_damage: boolean; battery_water_top_up: boolean; solar_recorded_at: string; panels_installed: number; panels_operational: number; damaged_panel_count: number; solar_operating_normally: boolean; earthing_recorded_at: string; earthing_abnormalities: boolean }[];
+      };
+      analytics_pm_compliance: {
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_group: string;
+          p_region?: string;
+        };
+        Returns: { group_key: string; group_label: string; scheduled: number; completed: number; on_time: number; overdue: number }[];
+      };
+      analytics_technicians: {
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_region?: string;
+        };
+        Returns: { technician_id: string; technician_name: string; region_name: string; pm_submitted: number; pm_approved: number; pm_returned: number; pm_awaiting_review: number; avg_pm_minutes: number; failures_reported: number; actions_assigned: number; actions_completed: number; actions_overdue: number }[];
+      };
       can_manage_site: {
         Args: {
           p_site_id: string;
