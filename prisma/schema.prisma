@@ -1,0 +1,15 @@
+// IPT PowerTech Telecom Power PM System — database schema (MySQL 8+).
+// Phase 1 configures the datasource and client only; the tables are added in
+// Phase 2 (organisation, users, roles) and later phases.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../apps/api/src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+  runtime             = "nodejs"
+}
+
+datasource db {
+  provider = "mysql"
+}

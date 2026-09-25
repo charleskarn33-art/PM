@@ -1,0 +1,97 @@
+# Production stack on a VPS:  docker compose --env-file docker/.env -f docker/docker-compose.yml up -d
+# MySQL has no published port: only the API (on the private `backend` network) reaches it.
+name: ipt-pm
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?set MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER:?set MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/conf.d:/etc/mysql/conf.d:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  migrate:
+    build: { context: .., dockerfile: docker/api.Dockerfile, target: migrate }
+    environment:
+      DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}?allowPublicKeyRetrieval=true
+    depends_on:
+      mysql: { condition: service_healthy }
+    networks: [backend]
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
+      target: runtime
+      args: { APP_VERSION: "${APP_VERSION:-dev}" }
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: "3001"
+      API_URL: ${API_URL:?set API_URL}
+      WEB_URL: ${WEB_URL:?set WEB_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:?set CORS_ORIGIN}
+      DATABASE_URL: mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE}?allowPublicKeyRetrieval=true&connectionLimit=20
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?set JWT_REFRESH_SECRET}
+      STORAGE_DRIVER: local
+      STORAGE_PATH: /app/storage
+      STORAGE_BASE_URL: ${STORAGE_BASE_URL:?set STORAGE_BASE_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TRUST_PROXY_HOPS: "1"
+    volumes:
+      - storage:/app/storage
+    depends_on:
+      mysql: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    networks: [backend, edge]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+
+  nginx:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?set API_DOMAIN}
+    volumes:
+      - ./nginx/templates:/etc/nginx/templates:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    depends_on: [api]
+    networks: [edge]
+
+  # Renews the Let's Encrypt certificate (first issue: see docs/DEPLOYMENT_VPS.md).
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"]
+    networks: [edge]
+
+networks:
+  backend:
+    internal: true   # no route to the Internet; MySQL is reachable only from here
+  edge: {}
+
+volumes:
+  mysql-data: {}
+  storage: {}
+  letsencrypt: {}
+  certbot-www: {}

@@ -1,0 +1,15 @@
+**/node_modules
+**/.next
+**/dist
+**/.expo
+**/.env
+**/.env.*
+!**/.env.example
+.git
+apps/api/src/generated
+apps/web
+apps/mobile
+supabase
+e2e
+docs
+**/*.log

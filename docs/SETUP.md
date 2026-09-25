@@ -1,131 +1,64 @@
-# Setup and Deployment
+# Local development setup
 
-For deploying to staging and production (Supabase, Vercel, EAS, the Deploy workflow, rollback and monitoring) follow **[DEPLOYMENT.md](DEPLOYMENT.md)**. This page covers local setup and project configuration.
+Requirements: Node.js 22.13+, pnpm 10 (`corepack enable`), MySQL 8 (installed
+locally, or in Docker with `docker/docker-compose.dev.yml`).
 
-## Prerequisites
+## 1. Database
 
-- Node.js 22+, pnpm 10 (`corepack enable`)
-- A Supabase project (or the Supabase CLI + Docker for local development)
-- For database tests: a PostgreSQL 16 server you can create databases on
-
-```bash
-pnpm install
-```
-
-## 1. Database (Supabase)
-
-Hosted project:
+Either run MySQL in Docker (bound to 127.0.0.1 only):
 
 ```bash
-npx supabase link --project-ref <project-ref>
-npx supabase db push          # applies supabase/migrations/*.sql
+docker compose -f docker/docker-compose.dev.yml up -d
 ```
 
-`supabase/seed.sql` contains **demo data only** and is applied automatically by `supabase db reset` on a local stack. Do not run it against production.
-
-Local stack (Docker):
-
-```bash
-npx supabase start
-npx supabase db reset         # migrations + demo seed
-```
-
-### Bootstrap the first Super Admin
-
-Public sign-up is disabled. Create the first user in **Authentication → Users → Add user**, then run in the SQL editor:
+or use a local MySQL 8 server and create the databases and a user limited to them:
 
 ```sql
-select private.bootstrap_super_admin('admin@your-domain.com');
+CREATE DATABASE ipt_pm        CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+CREATE DATABASE ipt_pm_shadow CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; -- prisma migrate dev
+CREATE DATABASE ipt_pm_test   CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; -- integration tests
+CREATE USER 'ipt_pm'@'localhost' IDENTIFIED BY '<password>';
+GRANT ALL PRIVILEGES ON ipt_pm.*        TO 'ipt_pm'@'localhost';
+GRANT ALL PRIVILEGES ON ipt_pm_shadow.* TO 'ipt_pm'@'localhost';
+GRANT ALL PRIVILEGES ON ipt_pm_test.*   TO 'ipt_pm'@'localhost';
 ```
 
-After that, manage everything in the web portal:
+## 2. Environment
 
-- **Admin → Organization**: regions, clusters, counties.
-- **Sites**: create/edit sites (Super Admin), assign technicians (Super Admin / Regional Supervisor).
-- **Admin → Users**: invite users, set role, activation, home region, region scope (managers and supervisors), technician supervisor/employee code.
+```bash
+cp .env.example .env     # never committed
+```
 
-Users created directly in the Supabase dashboard start **inactive** (role `viewer`) until a Super Admin activates them in Admin → Users.
+Fill in the database URLs and two different random JWT secrets
+(`openssl rand -base64 48`). The API validates every variable at start and
+names any that are missing or unsafe (values are never printed).
 
-### Invitations and password reset (Auth email templates)
+## 3. Install, generate, run
 
-Invitations use the Auth admin API, which needs the **secret (service-role) key on the web server only**: set `SUPABASE_SECRET_KEY` in the server environment (never with a `NEXT_PUBLIC_` prefix — the build fails if you do). Without it the invite page is disabled with an explanation.
+```bash
+pnpm install              # also generates the Prisma client
+pnpm db:status            # Prisma can reach MySQL
+pnpm dev:api              # http://localhost:3001/api/v1/health
+```
 
-The web app verifies email links server-side at `/auth/confirm`. In **Authentication → Email Templates**, change the links to:
-
-| Template | Link |
+| Endpoint | Purpose |
 |---|---|
-| Invite user | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=invite&next=/auth/set-password` |
-| Reset password | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/auth/set-password` |
+| `GET /api/v1/health` | liveness (no dependencies) |
+| `GET /api/v1/health/ready` | readiness: MySQL reachable (503 otherwise) |
 
-### Scheduled job
-
-Enable the **pg_cron** extension (Database → Extensions) before running the migrations, and the migration schedules `mark_overdue_schedules()` daily at 00:15 UTC. If pg_cron is enabled later, run:
-
-```sql
-select cron.schedule('ipt-mark-overdue-pm', '15 0 * * *', 'select public.mark_overdue_schedules()');
-```
-
-Set **Authentication → URL configuration → Site URL** to the portal URL, and `SITE_URL` in the web app environment to the same value.
-
-## 2. Web app (`apps/web`)
-
-```bash
-cp apps/web/.env.example apps/web/.env.local   # set URL + publishable key
-pnpm dev:web                                   # http://localhost:3000
-```
-
-Deploy on **Vercel**: root directory `apps/web`, framework Next.js, install command `pnpm install`, and environment variables `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SITE_URL` (required in production: links in invitation and password-reset emails are built from it) and (server-only, for invitations) `SUPABASE_SECRET_KEY`. Add the production URL to Supabase **Auth → URL configuration**.
-
-PDF reports are rendered on the server (Node runtime, no extra service); they fetch the visit's photos through short-lived signed Storage URLs, so the server must be able to reach the Supabase URL.
-
-## 3. Mobile app (`apps/mobile`)
-
-```bash
-cp apps/mobile/.env.example apps/mobile/.env   # set URL + publishable key
-pnpm dev:mobile                                # Expo dev server
-```
-
-The app uses native modules (SecureStore, SQLite, Crypto, Camera, Location, File System, Image Manipulator, Network, Notifications, Device). Use a development build (`npx expo run:android` / `run:ios` or EAS Build); Expo Go is not enough. Builds for distribution: EAS (`eas build`), with `EXPO_PUBLIC_*` variables set as EAS environment variables.
-
-Permissions (configured in `app.json`): camera (evidence photos) and location while the app is in use (GPS check-in at PM start). Location is never tracked in the background.
-
-**Offline use**: a technician must sign in and sync once with a connection; after that the PM list, sites and checklists work without a connection and changes are sent automatically when the connection returns. Photos are kept in the app's own storage until uploaded. Signing out with unsent work keeps that work on the phone until the same account signs in again.
-
-**Push notifications** (optional; the in-app notification list works without them):
-
-1. App build: run `eas init` so `app.json` has `extra.eas.projectId` (Expo push tokens need it), and configure FCM/APNs credentials with `eas credentials`.
-2. Deploy the sender: `supabase functions deploy send-push --no-verify-jwt`, then `supabase secrets set PUSH_FUNCTION_SECRET=<random string>` (and optionally `EXPO_ACCESS_TOKEN` if enhanced push security is enabled in Expo). The function uses the service role key that Supabase provides to Edge Functions; it is never shipped to an app.
-3. Schedule it every minute with the secret kept in Supabase Vault — see [DEPLOYMENT.md § 1.5](DEPLOYMENT.md#15-push-delivery-after-the-first-database-deploy).
-
-**Reminders** (`system_settings.notifications`): `pm_due_reminder_days` (days before the due date to remind the technician; null = off) and `corrective_action_overdue_enabled`. They are sent by `run_daily_notifications()`, scheduled daily by the migration when pg_cron is enabled; if you enable pg_cron later, schedule it yourself: `select cron.schedule('ipt-daily-notifications', '30 6 * * *', 'select public.run_daily_notifications()');`.
-
-**Settings** (web, Super Admin → Settings): GPS geofence radius and mode (WARN / REQUIRE_REASON / BLOCK), evidence-photo enforcement, DC high-load thresholds (empty = no flag) and consistency rules. Phones pick up changes on their next sync; the server always applies the current settings.
+Every other route requires `Authorization: Bearer <access token>`
+(login arrives in Phase 3).
 
 ## 4. Checks
 
 ```bash
-pnpm typecheck          # all packages
-pnpm lint
-pnpm test               # unit tests (shared, web, mobile)
-pnpm tools:postgrest    # once: downloads PostgREST into .tools/ for the API tests
-pnpm test:db            # migrations + RLS + workflow tests on PostgreSQL, API tests via PostgREST
-pnpm db:types           # regenerate packages/shared/src/database.types.ts after changing migrations
-pnpm --filter @ipt/mobile bundle:check   # Metro Android bundle
-pnpm test:e2e           # browser tests (builds the web app; see below)
-pnpm --filter @ipt/db-tests perf         # performance benchmark (about 12 minutes; see below)
+pnpm --filter @ipt/api typecheck
+pnpm --filter @ipt/api lint
+pnpm --filter @ipt/api test          # unit tests
+pnpm test:api                        # integration tests (needs TEST_DATABASE_URL)
+pnpm --filter @ipt/api build
+pnpm exec prisma validate
 ```
 
-**Browser tests** (`e2e/`, Playwright): the production web build runs against a fresh database (`ipt_pm_e2e`), the real PostgREST and a test gateway that stands in for Supabase Auth and Storage (`e2e/support/gateway.ts` — a test double, never deployed). They cover sign-in and redirects, every role's menu and forbidden pages, PM review, the failure → corrective action → verification flow, exports and the PDF, the audit log, site administration, and that every page works under the Content-Security-Policy. Needs `pnpm tools:postgrest` and a Chromium for Playwright (`pnpm --filter @ipt/e2e exec playwright install chromium`). `E2E_SKIP_BUILD=1` reuses the last e2e build while iterating on tests.
-
-**Performance benchmark** (`supabase/tests/perf/`): builds `ipt_pm_perf`, loads two years of monthly PM for 1,200 sites through the real triggers (about 26,000 PMs, 1.6 million answers, 300,000 audit entries — synthetic, never demo data) and times the web loaders, analytics and mobile sync through PostgREST as each role. `PERF_REUSE_DB=1` re-runs the timings on the last loaded database. Not part of CI (it takes about 12 minutes); run it after changing policies, views or analytics.
-
-`supabase/tests/src/mobile-sync.test.ts` runs the phone's real offline store and sync code against PostgREST end to end. Unlike the other API tests it commits data, so it uses its own region-C fixtures and deletes what it created. Storage uploads are simulated in that test (storage RLS still applies).
-
-The API tests start PostgREST (the server Supabase uses) against the test database and run the web and mobile query code with a signed JWT per role; every request uses `Prefer: tx=rollback`, so they change nothing. Without the binary they are skipped with a notice.
-
-`pnpm test:db` uses `TEST_DATABASE_ADMIN_URL` (default `postgres://postgres:postgres@localhost:5432/postgres`) and creates/drops the database `ipt_pm_test`. `pnpm db:types` reads from that database, so run `pnpm test:db` first.
-
-## Secrets
-
-- Only the Supabase URL and the **publishable/anon** key are used by the apps. Both apps refuse to start with a secret or service-role key.
-- Never commit `.env*` files (they are git-ignored). Never put the service-role key in `apps/web` or `apps/mobile`.
+The web and mobile apps still read data from the archived Supabase backend
+(see `docs/legacy/`) until they are moved to this API (Phases 3, 6–9).

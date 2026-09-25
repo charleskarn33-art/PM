@@ -4,8 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  # The deploy workflow runs every check first.
-  workflow_call:
 
 permissions:
   contents: read
@@ -91,3 +89,77 @@ jobs:
             e2e/playwright-report
             e2e/test-results
           retention-days: 7
+
+  api:
+    # NestJS API: typecheck, lint, unit and integration tests against MySQL 8, build.
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: ipt_pm_test
+          MYSQL_USER: ipt_pm
+          MYSQL_PASSWORD: ci-only-password
+          MYSQL_ROOT_PASSWORD: ci-only-root-password
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      TEST_DATABASE_URL: mysql://ipt_pm:ci-only-password@127.0.0.1:3306/ipt_pm_test?allowPublicKeyRetrieval=true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec prisma validate
+      - run: pnpm --filter @ipt/api typecheck
+      - run: pnpm --filter @ipt/api lint
+      - name: Unit and integration tests (MySQL 8.4)
+        run: pnpm --filter @ipt/api exec vitest run
+      - run: pnpm --filter @ipt/api build
+
+  api-image:
+    # Builds the production image and proves it starts and reaches MySQL.
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: ipt_pm
+          MYSQL_USER: ipt_pm
+          MYSQL_PASSWORD: ci-only-password
+          MYSQL_ROOT_PASSWORD: ci-only-root-password
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: docker/api.Dockerfile
+      - name: Compose file is valid
+        run: |
+          sed -e 's/^MYSQL_PASSWORD=$/MYSQL_PASSWORD=x/' -e 's/^MYSQL_ROOT_PASSWORD=$/MYSQL_ROOT_PASSWORD=x/' \
+              -e 's/^JWT_SECRET=$/JWT_SECRET=x/' -e 's/^JWT_REFRESH_SECRET=$/JWT_REFRESH_SECRET=x/' docker/.env.example > /tmp/ci.env
+          docker compose -f docker/docker-compose.yml --env-file /tmp/ci.env config -q
+      - name: Build the API image
+        run: docker build -f docker/api.Dockerfile --target runtime --build-arg APP_VERSION=${{ github.sha }} -t ipt-pm-api:ci .
+      - name: Start it and check readiness
+        run: |
+          docker run -d --name api --network host \
+            -e API_URL=https://api.example.com -e WEB_URL=https://pm.example.com -e CORS_ORIGIN=https://pm.example.com \
+            -e STORAGE_BASE_URL=https://api.example.com/api/v1/files \
+            -e DATABASE_URL='mysql://ipt_pm:ci-only-password@127.0.0.1:3306/ipt_pm?allowPublicKeyRetrieval=true' \
+            -e JWT_SECRET="$(openssl rand -hex 32)" -e JWT_REFRESH_SECRET="$(openssl rand -hex 32)" \
+            ipt-pm-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3001/api/v1/health/ready; then exit 0; fi
+            sleep 2
+          done
+          docker logs api
+          exit 1

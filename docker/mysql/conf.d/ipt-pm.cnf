@@ -1,0 +1,9 @@
+[mysqld]
+character-set-server = utf8mb4
+collation-server = utf8mb4_0900_ai_ci
+# Timestamps are stored in UTC; the apps convert for display.
+default-time-zone = '+00:00'
+skip-name-resolve
+max_connections = 200
+# Binary log kept for point-in-time recovery between backups (see backup plan, Phase 15).
+binlog_expire_logs_seconds = 604800
