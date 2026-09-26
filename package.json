@@ -22,11 +22,13 @@
     "test:e2e": "pnpm --filter @ipt/e2e run e2e",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
+    "db:migrate": "prisma migrate dev && prisma generate",
     "db:deploy": "prisma migrate deploy",
     "db:status": "prisma migrate status",
     "dev:api": "pnpm --filter @ipt/api dev",
-    "test:api": "pnpm --filter @ipt/api test:integration"
+    "test:api": "pnpm --filter @ipt/api test:integration",
+    "db:seed": "tsx prisma/seed.mts",
+    "db:seed:demo": "tsx prisma/seed-demo.mts"
   },
   "devDependencies": {
     "dotenv": "^17.4.2",

@@ -1,6 +1,8 @@
 import { Catch, HttpException, HttpStatus, Logger, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ThrottlerException } from '@nestjs/throttler';
+import { ZodError } from 'zod';
+import { zodDetails } from './validation.js';
 import type { ErrorBody } from './envelope.js';
 
 const CODES: Record<number, string> = {
@@ -78,6 +80,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
       code = exception.code;
       message = exception.message;
       details = exception.details;
+    } else if (exception instanceof ZodError) {
+      // Safety net: services validate with parseInput, but a stray parse() must not become a 500.
+      status = HttpStatus.UNPROCESSABLE_ENTITY;
+      code = 'VALIDATION_FAILED';
+      message = 'The request contains invalid values.';
+      details = zodDetails(exception.issues);
     } else if (exception instanceof ThrottlerException) {
       status = HttpStatus.TOO_MANY_REQUESTS;
       code = CODES[status]!;

@@ -5,5 +5,9 @@ collation-server = utf8mb4_0900_ai_ci
 default-time-zone = '+00:00'
 skip-name-resolve
 max_connections = 200
+# The migrations create triggers as the application user. With the binary log
+# on, MySQL requires this setting for non-SUPER users; it is safe with the
+# default row-based binlog format (row changes, not statements, are logged).
+log_bin_trust_function_creators = 1
 # Binary log kept for point-in-time recovery between backups (see backup plan, Phase 15).
 binlog_expire_logs_seconds = 604800

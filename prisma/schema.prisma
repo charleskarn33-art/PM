@@ -1,6 +1,15 @@
 // IPT PowerTech Telecom Power PM System — database schema (MySQL 8+).
-// Phase 1 configures the datasource and client only; the tables are added in
-// Phase 2 (organisation, users, roles) and later phases.
+//
+// Conventions
+// - Primary keys: UUID v7 (time-ordered) stored as CHAR(36). Records created
+//   offline on the phone carry client-generated UUIDs.
+// - Every table: created_at / updated_at; created_by / updated_by where a
+//   person makes the change. Timestamps are UTC (DATETIME(3)).
+// - Records are deactivated, not deleted, when history refers to them.
+// - is_demo marks demonstration data (the Tienii 1301 report) so it can be
+//   told apart from, and removed without touching, operational data.
+// - Hierarchy consistency (county → cluster → region) and value ranges are
+//   also enforced in MySQL (triggers / CHECK constraints in the migrations).
 
 generator client {
   provider            = "prisma-client"
@@ -12,4 +21,293 @@ generator client {
 
 datasource db {
   provider = "mysql"
+}
+
+// -----------------------------------------------------------------------------
+// People, roles and permissions
+// -----------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(uuid(7)) @db.Char(36)
+  /// Stored lower-case; unique.
+  email        String    @unique @db.VarChar(254)
+  fullName     String    @map("full_name") @db.VarChar(120)
+  phone        String?   @db.VarChar(32)
+  employeeCode String?   @unique @map("employee_code") @db.VarChar(32)
+  /// Argon2id hash; null until the user has set a password.
+  passwordHash String?   @map("password_hash") @db.VarChar(255)
+  isActive     Boolean   @default(true) @map("is_active")
+  /// Home region (technicians, supervisors). Access scope is user_region_scopes.
+  homeRegionId String?   @map("home_region_id") @db.Char(36)
+  /// Line manager, e.g. a technician's supervisor.
+  reportsToId  String?   @map("reports_to_id") @db.Char(36)
+  lastLoginAt  DateTime? @map("last_login_at")
+  isDemo       Boolean   @default(false) @map("is_demo")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  createdById  String?   @map("created_by") @db.Char(36)
+  updatedById  String?   @map("updated_by") @db.Char(36)
+
+  homeRegion    Region? @relation("UserHomeRegion", fields: [homeRegionId], references: [id], onDelete: Restrict)
+  reportsTo     User?   @relation("UserReportsTo", fields: [reportsToId], references: [id], onDelete: Restrict)
+  directReports User[]  @relation("UserReportsTo")
+  createdBy     User?   @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy     User?   @relation("UserUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  roles           UserRole[]        @relation("UserRoleUser")
+  regionScopes    UserRegionScope[] @relation("UserRegionScopeUser")
+  siteAssignments SiteAssignment[]  @relation("SiteAssignmentUser")
+
+  // Audit back-relations (who created / changed what).
+  usersCreated     User[]            @relation("UserCreatedBy")
+  usersUpdated     User[]            @relation("UserUpdatedBy")
+  rolesGranted     UserRole[]        @relation("UserRoleGrantedBy")
+  scopesGranted    UserRegionScope[] @relation("UserRegionScopeGrantedBy")
+  regionsCreated   Region[]          @relation("RegionCreatedBy")
+  regionsUpdated   Region[]          @relation("RegionUpdatedBy")
+  clustersCreated  Cluster[]         @relation("ClusterCreatedBy")
+  clustersUpdated  Cluster[]         @relation("ClusterUpdatedBy")
+  countiesCreated  County[]          @relation("CountyCreatedBy")
+  countiesUpdated  County[]          @relation("CountyUpdatedBy")
+  sitesCreated     Site[]            @relation("SiteCreatedBy")
+  sitesUpdated     Site[]            @relation("SiteUpdatedBy")
+  assignmentsMade  SiteAssignment[]  @relation("SiteAssignmentAssignedBy")
+  assignmentsEnded SiteAssignment[]  @relation("SiteAssignmentEndedBy")
+
+  @@index([homeRegionId])
+  @@index([reportsToId])
+  @@index([isActive])
+  @@index([fullName])
+  @@map("users")
+}
+
+/// Roles: SUPER_ADMIN, REGIONAL_MANAGER, REGIONAL_SUPERVISOR, TECHNICIAN,
+/// MAINTENANCE_USER, VIEWER (system roles, seeded). What a role may do is its
+/// permissions; where it may do it is the user's organisational scope.
+model Role {
+  id          String   @id @default(uuid(7)) @db.Char(36)
+  code        String   @unique @db.VarChar(40)
+  name        String   @db.VarChar(80)
+  description String   @db.VarChar(255)
+  /// System roles are maintained by the seed and cannot be deleted.
+  isSystem    Boolean  @default(false) @map("is_system")
+  sortOrder   Int      @default(0) @map("sort_order") @db.SmallInt
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+/// Explicit permissions checked by the API (e.g. `sites.manage`).
+model Permission {
+  id          String   @id @default(uuid(7)) @db.Char(36)
+  code        String   @unique @db.VarChar(64)
+  description String   @db.VarChar(255)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String   @map("role_id") @db.Char(36)
+  permissionId String   @map("permission_id") @db.Char(36)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId      String   @map("user_id") @db.Char(36)
+  roleId      String   @map("role_id") @db.Char(36)
+  grantedById String?  @map("granted_by") @db.Char(36)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user      User  @relation("UserRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  role      Role  @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  grantedBy User? @relation("UserRoleGrantedBy", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+/// Regions a manager or supervisor may work in (their organisational scope).
+model UserRegionScope {
+  userId      String   @map("user_id") @db.Char(36)
+  regionId    String   @map("region_id") @db.Char(36)
+  grantedById String?  @map("granted_by") @db.Char(36)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user      User   @relation("UserRegionScopeUser", fields: [userId], references: [id], onDelete: Cascade)
+  region    Region @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  grantedBy User?  @relation("UserRegionScopeGrantedBy", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  @@id([userId, regionId])
+  @@index([regionId])
+  @@map("user_region_scopes")
+}
+
+// -----------------------------------------------------------------------------
+// Organisation: Region → Cluster → County → Site
+// -----------------------------------------------------------------------------
+
+model Region {
+  id          String   @id @default(uuid(7)) @db.Char(36)
+  code        String   @unique @db.VarChar(32)
+  name        String   @unique @db.VarChar(120)
+  isActive    Boolean  @default(true) @map("is_active")
+  isDemo      Boolean  @default(false) @map("is_demo")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String?  @map("created_by") @db.Char(36)
+  updatedById String?  @map("updated_by") @db.Char(36)
+
+  createdBy User? @relation("RegionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User? @relation("RegionUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  clusters    Cluster[]
+  sites       Site[]
+  homeOfUsers User[]            @relation("UserHomeRegion")
+  scopes      UserRegionScope[]
+
+  @@map("regions")
+}
+
+model Cluster {
+  id          String   @id @default(uuid(7)) @db.Char(36)
+  regionId    String   @map("region_id") @db.Char(36)
+  code        String   @unique @db.VarChar(32)
+  name        String   @db.VarChar(120)
+  isActive    Boolean  @default(true) @map("is_active")
+  isDemo      Boolean  @default(false) @map("is_demo")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String?  @map("created_by") @db.Char(36)
+  updatedById String?  @map("updated_by") @db.Char(36)
+
+  region    Region @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  createdBy User?  @relation("ClusterCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?  @relation("ClusterUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  counties County[]
+  sites    Site[]
+
+  @@unique([regionId, name])
+  @@map("clusters")
+}
+
+model County {
+  id          String   @id @default(uuid(7)) @db.Char(36)
+  clusterId   String   @map("cluster_id") @db.Char(36)
+  code        String   @unique @db.VarChar(32)
+  name        String   @db.VarChar(120)
+  isActive    Boolean  @default(true) @map("is_active")
+  isDemo      Boolean  @default(false) @map("is_demo")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String?  @map("created_by") @db.Char(36)
+  updatedById String?  @map("updated_by") @db.Char(36)
+
+  cluster   Cluster @relation(fields: [clusterId], references: [id], onDelete: Restrict)
+  createdBy User?   @relation("CountyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?   @relation("CountyUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  sites Site[]
+
+  @@unique([clusterId, name])
+  @@map("counties")
+}
+
+enum SiteStatus {
+  ACTIVE
+  INACTIVE
+  DECOMMISSIONED
+}
+
+/// A telecom site. Cluster and county are optional (not always known); when
+/// set they must belong to the site's region (enforced by the API and by a
+/// database trigger).
+model Site {
+  id                   String     @id @default(uuid(7)) @db.Char(36)
+  siteCode             String     @unique @map("site_code") @db.VarChar(32)
+  siteName             String     @map("site_name") @db.VarChar(120)
+  regionId             String     @map("region_id") @db.Char(36)
+  clusterId            String?    @map("cluster_id") @db.Char(36)
+  countyId             String?    @map("county_id") @db.Char(36)
+  latitude             Decimal?   @db.Decimal(9, 6)
+  longitude            Decimal?   @db.Decimal(9, 6)
+  address              String?    @db.VarChar(500)
+  siteType             String?    @map("site_type") @db.VarChar(50)
+  status               SiteStatus @default(ACTIVE)
+  generatorAvailable   Boolean    @default(false) @map("generator_available")
+  solarAvailable       Boolean    @default(false) @map("solar_available")
+  gridAvailable        Boolean    @default(false) @map("grid_available")
+  batteryConfiguration String?    @map("battery_configuration") @db.VarChar(500)
+  powerConfiguration   String?    @map("power_configuration") @db.VarChar(500)
+  isDemo               Boolean    @default(false) @map("is_demo")
+  createdAt            DateTime   @default(now()) @map("created_at")
+  updatedAt            DateTime   @updatedAt @map("updated_at")
+  createdById          String?    @map("created_by") @db.Char(36)
+  updatedById          String?    @map("updated_by") @db.Char(36)
+
+  region    Region   @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  cluster   Cluster? @relation(fields: [clusterId], references: [id], onDelete: Restrict)
+  county    County?  @relation(fields: [countyId], references: [id], onDelete: Restrict)
+  createdBy User?    @relation("SiteCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?    @relation("SiteUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  assignments SiteAssignment[]
+
+  @@index([siteName])
+  @@index([regionId])
+  @@index([clusterId])
+  @@index([countyId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("sites")
+}
+
+enum AssignmentRole {
+  TECHNICIAN
+  SUPERVISOR
+}
+
+/// Who works on a site, over time. Assignments are ended (end_date, active =
+/// false), never deleted, so the history is kept. A site has at most one
+/// active supervisor; it may have several active technicians.
+model SiteAssignment {
+  id           String         @id @default(uuid(7)) @db.Char(36)
+  siteId       String         @map("site_id") @db.Char(36)
+  userId       String         @map("user_id") @db.Char(36)
+  role         AssignmentRole
+  startDate    DateTime       @map("start_date") @db.Date
+  endDate      DateTime?      @map("end_date") @db.Date
+  active       Boolean        @default(true)
+  endReason    String?        @map("end_reason") @db.VarChar(255)
+  isDemo       Boolean        @default(false) @map("is_demo")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  assignedById String?        @map("assigned_by") @db.Char(36)
+  endedById    String?        @map("ended_by") @db.Char(36)
+
+  site       Site  @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  user       User  @relation("SiteAssignmentUser", fields: [userId], references: [id], onDelete: Restrict)
+  assignedBy User? @relation("SiteAssignmentAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  endedBy    User? @relation("SiteAssignmentEndedBy", fields: [endedById], references: [id], onDelete: Restrict)
+
+  @@index([siteId, role, active])
+  @@index([userId, active])
+  @@index([startDate])
+  @@map("site_assignments")
 }

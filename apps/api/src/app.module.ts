@@ -3,6 +3,7 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import type { IncomingMessage } from 'node:http';
+import { AssignmentsModule } from './assignments/assignments.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 import { HttpExceptionFilter } from './common/http-exception.filter.js';
@@ -12,7 +13,9 @@ import { ResponseEnvelopeInterceptor } from './common/response.interceptor.js';
 import type { AppConfig } from './config/app-config.js';
 import { ConfigModule } from './config/config.module.js';
 import { HealthModule } from './health/health.module.js';
+import { OrganisationModule } from './organisation/organisation.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { UsersModule } from './users/users.module.js';
 
 @Module({})
 export class AppModule {
@@ -37,6 +40,9 @@ export class AppModule {
         PrismaModule,
         AuthModule,
         HealthModule,
+        OrganisationModule,
+        UsersModule,
+        AssignmentsModule,
         ...extra,
       ],
       providers: [

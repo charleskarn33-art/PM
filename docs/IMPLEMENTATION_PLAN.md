@@ -78,7 +78,30 @@ a written report, and **approval before the next phase**.
 | 14 | Testing | Unit, integration, authorisation matrix, sync, the 20-step end-to-end scenario, performance data set |
 | 15 | Production deployment | VPS hardening, TLS, backups and restore drill, monitoring, release process; remaining Supabase code deleted |
 
-## 5. Open decisions (do not block Phase 1)
+## 5. Delivered so far
+
+**Phase 1 — Foundation.** See the table above; verified against MySQL 8.0 locally and in CI (MySQL 8.4).
+
+**Phase 2 — Database.**
+- Tables: `users`, `roles`, `permissions`, `role_permissions`, `user_roles`,
+  `user_region_scopes`, `regions`, `clusters`, `counties`, `sites`,
+  `site_assignments` (migration `20260926101054_organisation_and_access`).
+- Database-level rules beyond Prisma: CHECK constraints (lower-case e-mail,
+  coordinate ranges and pairs, assignment dates) and triggers that keep a
+  site's region / cluster / county consistent, including when a cluster or
+  county is moved.
+- Permission catalogue (27 permissions) and the six system roles, seeded
+  idempotently (`pnpm db:seed`); the demo seed (`pnpm db:seed:demo`) holds only
+  Tienii 1301 / Grand Cape Mount / Abraham Cole, flagged `is_demo`.
+- Services (no HTTP routes yet): organisation hierarchy and sites, users with
+  roles and region scopes, site assignments with history (one active
+  supervisor per site, several technicians, ended rather than deleted).
+- A site's supervisor is its active SUPERVISOR assignment, not a column on
+  `sites`, so the history stays complete.
+- PM templates, visits and readings are Phase 4–5 tables; the demo PM visit
+  (100 % complete, readings) is seeded with them.
+
+## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).
 2. VPS provider, OS and domain names (API and web).

@@ -21,7 +21,14 @@ CREATE USER 'ipt_pm'@'localhost' IDENTIFIED BY '<password>';
 GRANT ALL PRIVILEGES ON ipt_pm.*        TO 'ipt_pm'@'localhost';
 GRANT ALL PRIVILEGES ON ipt_pm_shadow.* TO 'ipt_pm'@'localhost';
 GRANT ALL PRIVILEGES ON ipt_pm_test.*   TO 'ipt_pm'@'localhost';
+-- The migrations create triggers as this (non-SUPER) user; with binary logging
+-- on (the MySQL 8 default) that needs:
+SET PERSIST log_bin_trust_function_creators = 1;
 ```
+
+The Docker configurations set `log_bin_trust_function_creators` in
+`docker/mysql/conf.d/ipt-pm.cnf`. The integration tests refuse any database
+whose name does not end in `_test`.
 
 ## 2. Environment
 
@@ -37,9 +44,17 @@ names any that are missing or unsafe (values are never printed).
 
 ```bash
 pnpm install              # also generates the Prisma client
-pnpm db:status            # Prisma can reach MySQL
+pnpm db:status            # Prisma can reach MySQL, migrations pending?
+pnpm db:deploy            # apply the migrations (production-style, non-destructive)
+pnpm db:seed              # roles, permissions and grants (idempotent)
+pnpm db:seed:demo         # optional: Tienii 1301 DEMO data (refused when NODE_ENV=production)
 pnpm dev:api              # http://localhost:3001/api/v1/health
 ```
+
+Demo records carry `is_demo = 1` and use the reserved `.invalid` e-mail
+domain; `pnpm db:seed:demo --remove` deletes them again. Schema changes are
+made with `pnpm db:migrate` (creates a migration with `prisma migrate dev`
+against the shadow database, then regenerates the client).
 
 | Endpoint | Purpose |
 |---|---|
@@ -47,7 +62,9 @@ pnpm dev:api              # http://localhost:3001/api/v1/health
 | `GET /api/v1/health/ready` | readiness: MySQL reachable (503 otherwise) |
 
 Every other route requires `Authorization: Bearer <access token>`
-(login arrives in Phase 3).
+(login arrives in Phase 3). Phase 2 adds the data layer (organisation,
+users, roles, assignments) as services; their HTTP routes come with the
+permission and scope guards in Phase 3.
 
 ## 4. Checks
 

@@ -116,6 +116,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma validate
+      - name: Allow the migrations' triggers (binary logging is on in MySQL 8.4)
+        run: mysql -h 127.0.0.1 -uroot -pci-only-root-password -e "SET PERSIST log_bin_trust_function_creators = 1"
       - run: pnpm --filter @ipt/api typecheck
       - run: pnpm --filter @ipt/api lint
       - name: Unit and integration tests (MySQL 8.4)
