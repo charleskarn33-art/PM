@@ -13,8 +13,8 @@ export default function AccountInactivePage() {
         <CardHeader>
           <CardTitle>Account pending activation</CardTitle>
           <CardDescription>
-            You are signed in, but your account has not been activated or has no role assigned yet. A Super Admin
-            must activate your account before you can access PM data.
+            Your account is inactive or has no role assigned yet. A Super Admin must activate your account and give it
+            a role before you can access PM data.
           </CardDescription>
         </CardHeader>
         <CardContent>

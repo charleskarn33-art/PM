@@ -28,7 +28,8 @@
     "dev:api": "pnpm --filter @ipt/api dev",
     "test:api": "pnpm --filter @ipt/api test:integration",
     "db:seed": "tsx prisma/seed.mts",
-    "db:seed:demo": "tsx prisma/seed-demo.mts"
+    "db:seed:demo": "tsx prisma/seed-demo.mts",
+    "db:create-admin": "tsx prisma/create-admin.mts"
   },
   "devDependencies": {
     "dotenv": "^17.4.2",

@@ -16,7 +16,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   if (!isUuid(id)) return NextResponse.json({ error: 'Invalid PM visit' }, { status: 400 });
   const session = await requireSession();
   const supabase = await createClient();
-  const data = await loadPmReportData(supabase, id, session.profile.full_name || session.email);
+  const data = await loadPmReportData(supabase, id, session.fullName || session.email);
   if (!data) return NextResponse.json({ error: 'PM visit not found' }, { status: 404 });
 
   const pdf = await renderToBuffer(createElement(PmReportDocument, { data }) as Parameters<typeof renderToBuffer>[0]);

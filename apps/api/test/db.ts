@@ -5,7 +5,7 @@ import { assertTestDatabase } from './global-setup.js';
 import { testConfig } from './support.js';
 
 /** Tables holding data (reference tables are re-seeded, not cleared by order). */
-const DATA_TABLES = ['site_assignments', 'user_region_scopes', 'user_roles', 'sites', 'counties', 'clusters', 'regions', 'users'];
+const DATA_TABLES = ['refresh_tokens', 'site_assignments', 'user_region_scopes', 'user_roles', 'sites', 'counties', 'clusters', 'regions', 'users'];
 
 export function testPrisma(): PrismaService {
   return new PrismaService(testConfig() as AppConfig);

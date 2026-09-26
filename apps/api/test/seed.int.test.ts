@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { PERMISSIONS, SYSTEM_ROLES } from '../src/authz/catalog.js';
 import { DEMO, removeDemoData, seedDemoData } from '../src/seed/demo.js';
+import { createFirstAdmin } from '../src/seed/first-admin.js';
 import { seedReferenceData } from '../src/seed/reference.js';
 import { resetData, testPrisma } from './db.js';
 import { makeOrg, services } from './fixtures.js';
@@ -84,5 +85,24 @@ describe('demo seed (Tienii 1301)', () => {
     expect(await prisma.site.findMany({ select: { id: true } })).toEqual([{ id: realSite.id }]);
     expect(await prisma.user.findMany({ select: { id: true } })).toEqual([{ id: realUser.id }]);
     expect(await prisma.region.count()).toBe(1);
+  });
+});
+
+describe('first Super Admin (installation bootstrap)', () => {
+  it('creates one Super Admin with an Argon2id hash, then refuses a second', async () => {
+    const admin = await createFirstAdmin(prisma, { email: ' Admin@IPT-Example.com ', fullName: 'First Admin', password: 'a-long-first-password' });
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: admin.id }, include: { roles: { include: { role: true } } } });
+    expect(row.email).toBe('admin@ipt-example.com');
+    expect(row.passwordHash).toMatch(/^\$argon2id\$/);
+    expect(row.mustChangePassword).toBe(false);
+    expect(row.roles.map((r) => r.role.code)).toEqual(['SUPER_ADMIN']);
+    await expect(createFirstAdmin(prisma, { email: 'second@example.com', fullName: 'Second', password: 'a-long-first-password' })).rejects.toThrow(/already exists/);
+  });
+
+  it('validates the input', async () => {
+    await expect(createFirstAdmin(prisma, { email: 'x@example.com', fullName: 'X', password: 'short' })).rejects.toThrow(/at least 12/);
+    await expect(createFirstAdmin(prisma, { email: 'not-an-email', fullName: 'X', password: 'a-long-first-password' })).rejects.toThrow(/e-mail/);
+    await expect(createFirstAdmin(prisma, { email: 'long.address@example.com', fullName: 'X', password: 'long.address@example.com' })).rejects.toThrow(/must not be/);
+    expect(await prisma.user.count()).toBe(0);
   });
 });

@@ -64,8 +64,7 @@ function deleteFiles(uris: string[]) {
  * request. Clears the phone's copy on sign-out unless work is unsent.
  */
 export function OfflineProvider({ children }: { children: ReactNode }) {
-  const { session, status: authStatus } = useAuth();
-  const userId = session?.user.id ?? null;
+  const { userId, status: authStatus } = useAuth();
   const [store, setStore] = useState<LocalStore | null>(null);
   const [storeError, setStoreError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);

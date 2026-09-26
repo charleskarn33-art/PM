@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { invalid, notFound, rethrowDbError } from '../common/prisma-errors.js';
 import { parseInput } from '../common/validation.js';
+import type { AuthUser } from '../auth/auth-user.js';
+import { regionScope, siteScope, within } from '../authz/scope.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -22,8 +24,9 @@ interface Hierarchy {
 }
 
 /**
- * Regions → clusters → counties → sites. Every input is validated here (the
- * controllers of Phase 3 add authentication, permissions and scope).
+ * Regions → clusters → counties → sites. Every input is validated here; the
+ * controllers add authentication and permissions, and pass the caller so
+ * reads are limited to their scope.
  */
 @Injectable()
 export class OrganisationService {
@@ -68,9 +71,10 @@ export class OrganisationService {
     return this.prisma.county.update({ where: { id }, data: { ...data, updatedById: actorId } }).catch(rethrowDbError);
   }
 
-  /** The whole tree for pickers and filters (small: tens of regions, hundreds of counties). */
-  listHierarchy() {
+  /** The tree for pickers and filters (small: tens of regions, hundreds of counties), limited to the caller's scope. */
+  listHierarchy(caller?: AuthUser) {
     return this.prisma.region.findMany({
+      where: caller ? regionScope(caller) : undefined,
       orderBy: { name: 'asc' },
       include: { clusters: { orderBy: { name: 'asc' }, include: { counties: { orderBy: { name: 'asc' } } } } },
     });
@@ -100,9 +104,10 @@ export class OrganisationService {
     return this.prisma.site.update({ where: { id }, data: { ...rest, ...hierarchy, updatedById: actorId } }).catch(rethrowDbError);
   }
 
-  async getSite(id: string) {
-    const site = await this.prisma.site.findUnique({
-      where: { id },
+  /** A site, if the caller may see it (otherwise "not found"). */
+  async getSite(id: string, caller?: AuthUser) {
+    const site = await this.prisma.site.findFirst({
+      where: within<Prisma.SiteWhereInput>(caller ? siteScope(caller) : undefined, { id }),
       include: {
         region: { select: { id: true, code: true, name: true } },
         cluster: { select: { id: true, code: true, name: true } },
@@ -113,12 +118,12 @@ export class OrganisationService {
     return site;
   }
 
-  /** Paginated site list with filters (no unbounded reads). */
-  async listSites(query: unknown, restrictTo?: Prisma.SiteWhereInput) {
+  /** Paginated site list with filters (no unbounded reads), limited to the caller's scope. */
+  async listSites(query: unknown, caller?: AuthUser) {
     const q = parseInput(SiteListQuery, query);
     const where: Prisma.SiteWhereInput = {
       AND: [
-        restrictTo ?? {},
+        (caller && siteScope(caller)) ?? {},
         q.regionId ? { regionId: q.regionId } : {},
         q.clusterId ? { clusterId: q.clusterId } : {},
         q.countyId ? { countyId: q.countyId } : {},

@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { invalid, notFound } from '../common/prisma-errors.js';
 import { parseInput } from '../common/validation.js';
 import { AppError } from '../common/http-exception.filter.js';
+import type { AuthUser } from '../auth/auth-user.js';
+import { managesRegion } from '../authz/scope.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
@@ -32,14 +34,21 @@ const DAY = 86_400_000;
 export class AssignmentsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async assign(input: unknown, actorId: string | null) {
+  /**
+   * `caller` (from the API) limits changes to the caller's regions; site
+   * supervisors are appointed only by users with access everywhere.
+   */
+  async assign(input: unknown, actorId: string | null, caller?: AuthUser) {
     const data = parseInput(AssignInput, input);
     return this.prisma.$transaction(async (tx) => {
       // Serialise assignment changes per site (e.g. two supervisors assigned at once).
       const locked = await tx.$queryRaw<{ id: string; status: string; region_id: string }[]>`
         SELECT id, status, region_id FROM sites WHERE id = ${data.siteId} FOR UPDATE`;
       const site = locked[0];
-      if (!site) throw invalid('INVALID_REFERENCE', 'The site does not exist.');
+      if (!site || (caller && !managesRegion(caller, site.region_id))) throw invalid('INVALID_REFERENCE', 'The site does not exist.');
+      if (caller && data.role === 'SUPERVISOR' && !caller.isGlobal) {
+        throw new AppError(403, 'FORBIDDEN', 'Only an administrator can appoint a site supervisor.');
+      }
       if (site.status !== 'ACTIVE') throw invalid('SITE_NOT_ACTIVE', 'Only active sites can be assigned.');
 
       const user = await tx.user.findUnique({
@@ -77,16 +86,21 @@ export class AssignmentsService {
     });
   }
 
-  async end(assignmentId: string, input: unknown, actorId: string | null) {
+  async end(assignmentId: string, input: unknown, actorId: string | null, caller?: AuthUser) {
     const data = parseInput(EndAssignmentInput, input);
-    const a = await this.prisma.siteAssignment.findUnique({ where: { id: assignmentId } });
-    if (!a) throw notFound('Assignment');
+    const a = await this.prisma.siteAssignment.findUnique({ where: { id: assignmentId }, include: { site: { select: { regionId: true } } } });
+    if (!a || (caller && !managesRegion(caller, a.site.regionId))) throw notFound('Assignment');
+    if (caller && a.role === 'SUPERVISOR' && !caller.isGlobal) {
+      throw new AppError(403, 'FORBIDDEN', 'Only an administrator can end a site supervisor assignment.');
+    }
     if (!a.active) throw invalid('ALREADY_ENDED', 'This assignment has already ended.');
     if (data.endDate < a.startDate) throw invalid('END_BEFORE_START', 'The end date is before the start date.');
-    return this.prisma.siteAssignment.update({
+    const { site: _site, ...ended } = await this.prisma.siteAssignment.update({
       where: { id: assignmentId },
       data: { active: false, endDate: data.endDate, endReason: data.reason ?? null, endedById: actorId },
+      include: { site: { select: { regionId: true } } },
     });
+    return ended;
   }
 
   /** Full history for a site, newest first. */

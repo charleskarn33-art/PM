@@ -15,7 +15,8 @@ function RootNavigator() {
   if (status === 'loading') return <LoadingView label="Starting…" />;
 
   const signedIn = status === 'signed-in';
-  const fieldUser = signedIn && Boolean(profile?.is_active) && isMobileRole(profile?.role);
+  const mustChangePassword = signedIn && Boolean(profile?.must_change_password);
+  const fieldUser = signedIn && !mustChangePassword && Boolean(profile?.is_active) && isMobileRole(profile?.role);
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
@@ -51,7 +52,10 @@ function RootNavigator() {
           }}
         />
       </Stack.Protected>
-      <Stack.Protected guard={signedIn && !fieldUser}>
+      <Stack.Protected guard={mustChangePassword}>
+        <Stack.Screen name="change-password" />
+      </Stack.Protected>
+      <Stack.Protected guard={signedIn && !mustChangePassword && !fieldUser}>
         <Stack.Screen name="account-status" />
       </Stack.Protected>
       <Stack.Protected guard={!signedIn}>

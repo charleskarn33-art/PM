@@ -12,8 +12,9 @@ describe('users', () => {
   it('stores the email lower-case and rejects the same address in another case', async () => {
     const u = await users.createUser({ email: '  Abraham.Cole@IPT-Example.com ', fullName: 'Abraham Cole', roles: ['TECHNICIAN'] }, null);
     expect(u.email).toBe('abraham.cole@ipt-example.com');
-    expect(u.passwordHash).toBeNull();
-    const dup = await expectAppError(users.createUser({ email: 'ABRAHAM.COLE@ipt-example.com', fullName: 'X', roles: ['VIEWER'] }, null), 409, 'ALREADY_EXISTS');
+    expect(u).not.toHaveProperty('passwordHash');
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: u.id } })).passwordHash).toBeNull();
+    const dup = await expectAppError(users.createUser({ email: 'ABRAHAM.COLE@ipt-example.com', fullName: 'X', roles: ['TECHNICIAN'] }, null), 409, 'ALREADY_EXISTS');
     expect(dup.details).toEqual({ field: 'email' });
   });
 
@@ -34,7 +35,7 @@ describe('users', () => {
 
   it("a technician's line manager must be an active supervisor or manager", async () => {
     const { region } = await makeOrg(org);
-    const viewer = await makeUser(users, ['VIEWER']);
+    const viewer = await makeUser(users, ['VIEWER'], { regionScopeIds: [region.id] });
     await expectAppError(makeUser(users, ['TECHNICIAN'], { reportsToId: viewer.id }), 422, 'INVALID_LINE_MANAGER');
     const sup = await makeUser(users, ['REGIONAL_SUPERVISOR'], { regionScopeIds: [region.id] });
     const tech = await makeUser(users, ['TECHNICIAN'], { reportsToId: sup.id, homeRegionId: region.id });

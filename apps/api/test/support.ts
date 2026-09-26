@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { createApp } from '../src/app.js';
 import { CurrentUser, type AuthUser } from '../src/auth/auth-user.js';
 import { Public } from '../src/auth/public.decorator.js';
+import { SignedIn } from '../src/authz/decorators.js';
 import { ZodValidationPipe } from '../src/common/zod-validation.pipe.js';
 import { loadConfig, type AppConfig } from '../src/config/app-config.js';
 
@@ -29,8 +30,10 @@ export function testConfig(overrides: Record<string, string> = {}): AppConfig {
 const EchoBody = z.strictObject({ loadCurrentA: z.number().nonnegative(), note: z.string().max(20).optional() });
 
 /** Test-only routes (never part of the production app). */
+@SignedIn()
 @Controller('test-probe')
 class ProbeController {
+
   @Get('me')
   me(@CurrentUser() user: AuthUser) {
     return user;
@@ -48,7 +51,16 @@ class ProbeController {
   }
 }
 
-@Module({ controllers: [ProbeController] })
+/** Declares no access rule at all: must be refused even for a signed-in user. */
+@Controller('test-undeclared')
+class UndeclaredController {
+  @Get()
+  undeclared() {
+    return 'should never be reached';
+  }
+}
+
+@Module({ controllers: [ProbeController, UndeclaredController] })
 export class ProbeModule {}
 
 export async function startApp(config: AppConfig, withProbe = true): Promise<NestExpressApplication> {

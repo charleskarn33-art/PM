@@ -101,6 +101,30 @@ a written report, and **approval before the next phase**.
 - PM templates, visits and readings are Phase 4–5 tables; the demo PM visit
   (100 % complete, readings) is seeded with them.
 
+**Phase 3 — Authentication and authorisation.** (Endpoints: [`API.md`](API.md).)
+- Sign-in with Argon2id, the same answer for unknown e-mail and wrong
+  password, account lockout after repeated failures, per-IP rate limit on the
+  auth endpoints (the web server relays the browser's IP with a shared
+  secret, `WEB_FORWARD_SECRET`).
+- Refresh tokens stored server-side (`refresh_tokens`), rotated on every use,
+  reuse detection revoking the session family (short grace period for
+  parallel requests), sign-out, sign-out everywhere, and immediate invalidation
+  of access tokens on sign-out everywhere, password change and deactivation.
+- Temporary passwords set by an administrator must be changed at the next
+  sign-in; the first Super Admin is created with `pnpm db:create-admin`.
+- A global guard that loads roles, permissions and scope from the database on
+  every request and refuses any route without an access declaration; scope
+  filters for sites, regions and people; HTTP routes for users, roles,
+  organisation, sites and assignments.
+- Web: sign-in, sign-out, password change and the profile page on the API
+  (tokens in httpOnly cookies, refreshed by the proxy). Mobile: sign-in,
+  password change and profile on the API (tokens in SecureStore, offline-safe
+  refresh). Their other screens still read the archived Supabase backend until
+  Phases 4–9; the Supabase-based browser suite is retired and rebuilt in Phase 14.
+- Not yet: audit log entries for sign-ins and changes (Phase 13), e-mail
+  password reset (no e-mail service configured), scheduled purge of expired
+  refresh-token rows (`AuthService.purgeExpired`, run by the worker in Phase 12).
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).

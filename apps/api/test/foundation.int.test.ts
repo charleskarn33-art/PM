@@ -1,17 +1,24 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { TokenService } from '../src/auth/token.service.js';
+import { PrismaService } from '../src/prisma/prisma.service.js';
 import { startApp, testConfig } from './support.js';
 
 let app: NestExpressApplication;
 let http: ReturnType<NestExpressApplication['getHttpServer']>;
+let userId: string;
 
 beforeAll(async () => {
   app = await startApp(testConfig());
   http = app.getHttpServer();
+  // A signed-in caller must exist and be active; this one has no roles.
+  const user = await app.get(PrismaService).user.create({ data: { email: `probe.${randomUUID()}@example.com`, fullName: 'Probe' } });
+  userId = user.id;
 });
 afterAll(async () => {
+  await app?.get(PrismaService).user.deleteMany({ where: { id: userId } });
   await app?.close();
 });
 
@@ -51,9 +58,24 @@ describe('authentication foundation', () => {
   });
 
   it('a valid access token is accepted and identifies the caller', async () => {
-    const token = await app.get(TokenService).signAccessToken('0190f5a2-0000-7000-8000-00000000000a');
+    const token = await app.get(TokenService).signAccessToken(userId);
     const res = await request(http).get('/api/v1/test-probe/me').set('Authorization', `Bearer ${token}`).expect(200);
-    expect(res.body).toEqual({ data: { id: '0190f5a2-0000-7000-8000-00000000000a' } });
+    expect(res.body.data).toMatchObject({ id: userId, roles: [], permissions: [], isGlobal: false });
+  });
+
+  it('a valid token for a user that does not exist is refused', async () => {
+    const token = await app.get(TokenService).signAccessToken('0190f5a2-0000-7000-8000-00000000000a');
+    const res = await request(http).get('/api/v1/test-probe/me').set('Authorization', `Bearer ${token}`).expect(401);
+    expect(res.body.error.code).toBe('INVALID_TOKEN');
+  });
+
+  it('a route that declares no access rule is refused even when signed in', async () => {
+    const token = await app.get(TokenService).signAccessToken(userId);
+    const res = await request(http).get('/api/v1/test-undeclared').set('Authorization', `Bearer ${token}`).expect(403);
+    expect(res.body.error.code).toBe('FORBIDDEN');
+    // …and a permission the user lacks (no roles) is refused too.
+    const roles = await request(http).get('/api/v1/roles').set('Authorization', `Bearer ${token}`).expect(403);
+    expect(roles.body.error.code).toBe('FORBIDDEN');
   });
 
   it('refresh tokens, malformed tokens and other schemes are refused', async () => {
@@ -66,7 +88,7 @@ describe('authentication foundation', () => {
 });
 
 describe('input validation', () => {
-  const auth = async () => `Bearer ${await app.get(TokenService).signAccessToken('u1')}`;
+  const auth = async () => `Bearer ${await app.get(TokenService).signAccessToken(userId)}`;
 
   it('accepts valid input', async () => {
     const res = await request(http).post('/api/v1/test-probe/echo').set('Authorization', await auth()).send({ loadCurrentA: 52.7 }).expect(201);

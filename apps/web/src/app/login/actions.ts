@@ -1,14 +1,17 @@
 'use server';
 
 import { redirect } from 'next/navigation';
+import { ApiError } from '@/lib/api/client';
+import { apiAnonymous, storeSession } from '@/lib/api/server';
+import type { TokenPair } from '@/lib/api/session-cookies';
 import { safeNextPath } from '@/lib/routes';
-import { createClient } from '@/lib/supabase/server';
 
 export interface LoginState {
   error?: string;
   email?: string;
 }
 
+/** Signs in through the API; the tokens go into httpOnly cookies, never to the page. */
 export async function signIn(_prev: LoginState, formData: FormData): Promise<LoginState> {
   const email = String(formData.get('email') ?? '').trim();
   const password = String(formData.get('password') ?? '');
@@ -18,21 +21,19 @@ export async function signIn(_prev: LoginState, formData: FormData): Promise<Log
     return { error: 'Enter your email address and password.', email };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) {
-    const message =
-      error.code === 'invalid_credentials'
-        ? 'Incorrect email or password.'
-        : error.code === 'email_not_confirmed'
-          ? 'Your email address has not been confirmed yet. Check your inbox for the confirmation link.'
-          : `Unable to sign in: ${error.message}`;
-    return { error: message, email };
+  let session: TokenPair & { user: { mustChangePassword: boolean } };
+  try {
+    session = (await apiAnonymous<typeof session>('/auth/login', { body: { email, password, client: 'web' } })).data;
+  } catch (e) {
+    if (e instanceof ApiError) {
+      // The API's messages for these are written for users (and never reveal whether an account exists).
+      if (['INVALID_CREDENTIALS', 'ACCOUNT_INACTIVE', 'TOO_MANY_REQUESTS', 'API_UNAVAILABLE'].includes(e.code)) return { error: e.message, email };
+      if (e.code === 'VALIDATION_FAILED') return { error: 'Enter a valid email address and password.', email };
+    }
+    console.error('sign-in failed', e instanceof ApiError ? { status: e.status, code: e.code } : e);
+    return { error: 'Unable to sign in right now. Try again in a moment.', email };
   }
 
-  // Audit the login. A failure here must not block access, but it is reported.
-  const { error: auditError } = await supabase.rpc('record_login', { p_client: 'web' });
-  if (auditError) console.error('record_login failed', auditError);
-
-  redirect(next);
+  await storeSession(session);
+  redirect(session.user.mustChangePassword ? '/change-password' : next);
 }

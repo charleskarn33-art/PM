@@ -28,7 +28,7 @@ export default function HomeScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={status.syncing} onRefresh={() => void syncNow()} />}>
       <Text style={styles.hello}>Hello, {profile?.full_name || profile?.email}</Text>
-      <Text style={styles.role}>{profile ? ROLE_LABELS[profile.role] : ''}</Text>
+      <Text style={styles.role}>{profile?.role ? ROLE_LABELS[profile.role] : ''}</Text>
       <SyncBar />
       {profileFromCache ? <Banner tone="info" message="Working offline with the account details saved on this phone." /> : null}
       {local.error ? <Banner tone="danger" message={local.error} /> : null}

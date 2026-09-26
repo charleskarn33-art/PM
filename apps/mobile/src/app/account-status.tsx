@@ -14,10 +14,10 @@ export default function AccountStatusScreen() {
   if (profileError) {
     title = 'Account unavailable';
     message = profileError;
-  } else if (profile && !profile.is_active) {
+  } else if (profile && (!profile.is_active || !profile.role)) {
     title = 'Account pending activation';
-    message = 'Your account has not been activated yet. Ask a Super Admin to activate it and assign your role.';
-  } else if (profile) {
+    message = 'Your account is inactive or has no role yet. Ask a Super Admin to activate it and assign your role.';
+  } else if (profile?.role) {
     title = 'Use the web portal';
     message = `The field app is for Technicians and Maintenance users. Your role (${ROLE_LABELS[profile.role]}) uses the IPT PowerTech web portal.`;
   }

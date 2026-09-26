@@ -1,11 +1,15 @@
-import { Module, type DynamicModule } from '@nestjs/common';
+import { Module, type DynamicModule, type ExecutionContext } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
+import type { Request } from 'express';
 import type { IncomingMessage } from 'node:http';
 import { AssignmentsModule } from './assignments/assignments.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
+import { AuthzModule } from './authz/authz.module.js';
+import { AUTH_THROTTLE } from './authz/decorators.js';
+import { clientIp } from './common/client-ip.js';
 import { HttpExceptionFilter } from './common/http-exception.filter.js';
 import { logRedactPaths, logSerializers, pathOf } from './common/logging.js';
 import { requestId } from './common/request-id.js';
@@ -36,9 +40,23 @@ export class AppModule {
             ...(config.env === 'development' ? { transport: { target: 'pino-pretty', options: { singleLine: true } } } : {}),
           },
         }),
-        ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: config.rateLimitPerMinute }]),
+        ThrottlerModule.forRoot({
+          // Per client IP (the browser's, for requests relayed by the web app's server).
+          getTracker: (req: Record<string, unknown>) => clientIp(req as unknown as Request, config.webForwardSecret),
+          throttlers: [
+            { name: 'default', ttl: 60_000, limit: config.rateLimitPerMinute },
+            // Stricter per-IP limit, only on routes marked @AuthThrottle (sign-in, refresh, password change).
+            {
+              name: 'auth',
+              ttl: 60_000,
+              limit: config.auth.rateLimitPerMinute,
+              skipIf: (ctx: ExecutionContext) => !Reflect.getMetadata(AUTH_THROTTLE, ctx.getHandler()),
+            },
+          ],
+        }),
         PrismaModule,
         AuthModule,
+        AuthzModule,
         HealthModule,
         OrganisationModule,
         UsersModule,

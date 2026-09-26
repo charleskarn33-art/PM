@@ -30,7 +30,7 @@ describe('site assignments', () => {
 
   it('only matching, active people on active sites', async () => {
     const { site, region } = await setup();
-    const viewer = await makeUser(users, ['VIEWER']);
+    const viewer = await makeUser(users, ['VIEWER'], { regionScopeIds: [region.id] });
     await expectAppError(assignments.assign({ siteId: site.id, userId: viewer.id, role: 'TECHNICIAN', startDate: '2026-09-01' }, null), 422, 'ROLE_MISMATCH');
     await expectAppError(assignments.assign({ siteId: site.id, userId: viewer.id, role: 'SUPERVISOR', startDate: '2026-09-01' }, null), 422, 'ROLE_MISMATCH');
     const tech = await makeUser(users, ['TECHNICIAN']);

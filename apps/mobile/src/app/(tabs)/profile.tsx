@@ -36,7 +36,7 @@ export default function ProfileScreen() {
       <Card>
         <Row label="Name" value={profile?.full_name || '—'} />
         <Row label="Email" value={profile?.email ?? '—'} />
-        <Row label="Role" value={profile ? ROLE_LABELS[profile.role] : '—'} />
+        <Row label="Role" value={profile?.role ? ROLE_LABELS[profile.role] : '—'} />
         <Row label="Phone" value={profile?.phone || '—'} />
       </Card>
       <SyncBar />

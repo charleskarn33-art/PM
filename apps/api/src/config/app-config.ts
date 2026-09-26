@@ -21,6 +21,17 @@ export const envSchema = z
     JWT_REFRESH_SECRET: secret('JWT_REFRESH_SECRET'),
     JWT_ACCESS_TTL: z.coerce.number().int().positive().default(900),
     JWT_REFRESH_TTL: z.coerce.number().int().positive().default(2_592_000),
+    // Sign-in protection: the account locks for AUTH_LOCKOUT_MINUTES after this many consecutive failures.
+    AUTH_MAX_FAILED_LOGINS: z.coerce.number().int().min(1).max(100).default(5),
+    AUTH_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
+    // Stricter per-IP limit for the sign-in and token endpoints.
+    AUTH_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(10),
+    // A just-rotated refresh token is accepted again for this many seconds (parallel requests
+    // from one browser or a retried mobile request); after that, reuse revokes the session. 0 = never.
+    AUTH_REFRESH_REUSE_GRACE_SECONDS: z.coerce.number().int().min(0).max(60).default(10),
+    // Shared secret the web app's server sends with the browser's IP address, so rate limits and
+    // session records use the real client IP rather than the web server's. Optional.
+    WEB_FORWARD_SECRET: z.preprocess((v) => (v === '' ? undefined : v), secret('WEB_FORWARD_SECRET').optional()),
     STORAGE_DRIVER: z.enum(['local']).default('local'),
     STORAGE_PATH: z.string().min(1),
     STORAGE_BASE_URL: z.url(),
@@ -54,6 +65,8 @@ export class AppConfig {
   readonly corsOrigins!: string[];
   readonly databaseUrl!: string;
   readonly jwt!: { accessSecret: string; refreshSecret: string; accessTtlSeconds: number; refreshTtlSeconds: number };
+  readonly auth!: { maxFailedLogins: number; lockoutMinutes: number; rateLimitPerMinute: number; refreshReuseGraceSeconds: number };
+  readonly webForwardSecret!: string | null;
   readonly storage!: { driver: 'local'; path: string; baseUrl: string };
   readonly logLevel!: string;
   readonly rateLimitPerMinute!: number;
@@ -85,6 +98,13 @@ export function loadConfig(source: Record<string, string | undefined>): AppConfi
       accessTtlSeconds: e.JWT_ACCESS_TTL,
       refreshTtlSeconds: e.JWT_REFRESH_TTL,
     },
+    auth: {
+      maxFailedLogins: e.AUTH_MAX_FAILED_LOGINS,
+      lockoutMinutes: e.AUTH_LOCKOUT_MINUTES,
+      rateLimitPerMinute: e.AUTH_RATE_LIMIT_PER_MINUTE,
+      refreshReuseGraceSeconds: e.AUTH_REFRESH_REUSE_GRACE_SECONDS,
+    },
+    webForwardSecret: e.WEB_FORWARD_SECRET ?? null,
     storage: { driver: e.STORAGE_DRIVER, path: e.STORAGE_PATH, baseUrl: e.STORAGE_BASE_URL.replace(/\/$/, '') },
     logLevel: e.LOG_LEVEL,
     rateLimitPerMinute: e.RATE_LIMIT_PER_MINUTE,

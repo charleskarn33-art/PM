@@ -9,6 +9,8 @@ permissions:
   contents: read
 
 jobs:
+  # The browser end-to-end suite (e2e/) signed in through a Supabase stand-in; sign-in now goes
+  # through the API, so that suite is retired and rebuilt on the API in Phase 14 (Testing).
   checks:
     runs-on: ubuntu-latest
     services:
@@ -49,46 +51,7 @@ jobs:
         run: pnpm --filter @ipt/mobile bundle:check
         env:
           CI: '1'
-          EXPO_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
-          EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder-key
-
-  e2e:
-    # Browser tests: the production web build against a fresh database, the real
-    # PostgREST and the e2e gateway (test stand-in for Supabase Auth/Storage).
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      TEST_DATABASE_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm tools:postgrest
-      - name: Install Chromium for Playwright
-        run: pnpm --filter @ipt/e2e exec playwright install --with-deps chromium
-      - name: End-to-end tests
-        run: pnpm test:e2e
-      - name: Keep the report and traces of failures
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-report
-          path: |
-            e2e/playwright-report
-            e2e/test-results
-          retention-days: 7
+          EXPO_PUBLIC_API_URL: https://api.ci-placeholder.invalid
 
   api:
     # NestJS API: typecheck, lint, unit and integration tests against MySQL 8, build.

@@ -18,6 +18,13 @@ describe('buildCsp', () => {
     expect(csp).toContain('ws://localhost:54321');
     expect(csp).not.toContain('upgrade-insecure-requests');
   });
+  it('without a Supabase project, allows only this site', () => {
+    const csp = buildCsp({ nonce: 'n', dev: false });
+    expect(csp).toContain("connect-src 'self';");
+    expect(csp).toContain("img-src 'self' data: blob:;");
+    expect(csp).toContain('upgrade-insecure-requests');
+    expect(buildCsp({ nonce: 'n', supabaseUrl: 'not a url', dev: false })).toContain("connect-src 'self';");
+  });
   it('creates a fresh random nonce each time', () => {
     const a = createNonce();
     expect(a).toMatch(/^[A-Za-z0-9+/]{22}==$/);

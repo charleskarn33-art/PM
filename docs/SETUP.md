@@ -48,23 +48,40 @@ pnpm db:status            # Prisma can reach MySQL, migrations pending?
 pnpm db:deploy            # apply the migrations (production-style, non-destructive)
 pnpm db:seed              # roles, permissions and grants (idempotent)
 pnpm db:seed:demo         # optional: Tienii 1301 DEMO data (refused when NODE_ENV=production)
+pnpm db:create-admin --email you@example.com --name "Your Name"   # first Super Admin
 pnpm dev:api              # http://localhost:3001/api/v1/health
 ```
+
+`db:create-admin` asks for the password at a hidden prompt (or reads
+`ADMIN_INITIAL_PASSWORD` for unattended setups — never a command-line
+argument) and works only while no active Super Admin exists. Everyone else is
+created by an administrator in the app, who gives them a temporary password
+(`POST /users/:id/temporary-password`); they must choose their own at the
+first sign-in.
 
 Demo records carry `is_demo = 1` and use the reserved `.invalid` e-mail
 domain; `pnpm db:seed:demo --remove` deletes them again. Schema changes are
 made with `pnpm db:migrate` (creates a migration with `prisma migrate dev`
 against the shadow database, then regenerates the client).
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/v1/health` | liveness (no dependencies) |
-| `GET /api/v1/health/ready` | readiness: MySQL reachable (503 otherwise) |
+The endpoints are listed in [`API.md`](API.md). Everything except health,
+sign-in, refresh and sign-out requires `Authorization: Bearer <access token>`.
 
-Every other route requires `Authorization: Bearer <access token>`
-(login arrives in Phase 3). Phase 2 adds the data layer (organisation,
-users, roles, assignments) as services; their HTTP routes come with the
-permission and scope guards in Phase 3.
+### Web and mobile
+
+```bash
+# apps/web/.env.local
+API_URL=http://localhost:3001
+WEB_FORWARD_SECRET=<same value as in the API's .env, optional>
+
+# apps/mobile/.env
+EXPO_PUBLIC_API_URL=http://10.0.2.2:3001   # Android emulator → this machine; https:// for real servers
+```
+
+The web app's server calls the API and keeps the tokens in httpOnly cookies;
+page scripts never see them. The mobile app keeps them in SecureStore. The
+pages and phone screens not yet moved to the API (Phases 4–9) still read the
+archived Supabase backend and show no data without it.
 
 ## 4. Checks
 
@@ -77,5 +94,7 @@ pnpm --filter @ipt/api build
 pnpm exec prisma validate
 ```
 
-The web and mobile apps still read data from the archived Supabase backend
-(see `docs/legacy/`) until they are moved to this API (Phases 3, 6–9).
+Apart from sign-in, sign-out, password change and the profile page, the
+web and mobile apps still read data from the archived Supabase backend (see
+`docs/legacy/`) until they are moved to this API (Phases 4–9). The browser
+suite in `e2e/` belongs to that backend and is rebuilt on the API in Phase 14.

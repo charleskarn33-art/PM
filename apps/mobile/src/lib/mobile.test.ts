@@ -95,18 +95,25 @@ describe('utf8', () => {
 });
 
 describe('readMobileEnv', () => {
-  it('accepts a valid configuration', () => {
-    expect(
-      readMobileEnv({ EXPO_PUBLIC_SUPABASE_URL: 'https://x.supabase.co', EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'k' }),
-    ).toEqual({ ok: true, env: { supabaseUrl: 'https://x.supabase.co', supabaseKey: 'k' } });
-  });
-  it('reports missing values and secret keys', () => {
-    const missing = readMobileEnv({});
-    expect(missing.ok).toBe(false);
-    const secret = readMobileEnv({
-      EXPO_PUBLIC_SUPABASE_URL: 'https://x.supabase.co',
-      EXPO_PUBLIC_SUPABASE_ANON_KEY: 'sb_secret_123',
+  it('needs the API URL; Supabase is optional (legacy sync only)', () => {
+    expect(readMobileEnv({ EXPO_PUBLIC_API_URL: 'https://api.example.com/' })).toEqual({
+      ok: true,
+      env: { apiUrl: 'https://api.example.com', supabaseUrl: null, supabaseKey: null },
     });
+    expect(
+      readMobileEnv({ EXPO_PUBLIC_API_URL: 'https://api.example.com', EXPO_PUBLIC_SUPABASE_URL: 'https://x.supabase.co', EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'k' }),
+    ).toEqual({ ok: true, env: { apiUrl: 'https://api.example.com', supabaseUrl: 'https://x.supabase.co', supabaseKey: 'k' } });
+    expect(readMobileEnv({})).toMatchObject({ ok: false, error: expect.stringMatching(/EXPO_PUBLIC_API_URL/) });
+  });
+  it('requires https except for a local development server', () => {
+    expect(readMobileEnv({ EXPO_PUBLIC_API_URL: 'http://api.example.com' })).toMatchObject({ ok: false, error: expect.stringMatching(/https/) });
+    for (const url of ['http://localhost:3001', 'http://10.0.2.2:3001', 'http://192.168.1.20:3001']) {
+      expect(readMobileEnv({ EXPO_PUBLIC_API_URL: url }).ok).toBe(true);
+    }
+    expect(readMobileEnv({ EXPO_PUBLIC_API_URL: 'not a url' }).ok).toBe(false);
+  });
+  it('refuses secret keys', () => {
+    const secret = readMobileEnv({ EXPO_PUBLIC_API_URL: 'https://api.example.com', EXPO_PUBLIC_SUPABASE_URL: 'https://x.supabase.co', EXPO_PUBLIC_SUPABASE_ANON_KEY: 'sb_secret_123' });
     expect(secret).toMatchObject({ ok: false, error: expect.stringMatching(/secret/) });
   });
 });

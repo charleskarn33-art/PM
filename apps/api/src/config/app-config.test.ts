@@ -21,7 +21,15 @@ describe('loadConfig', () => {
     expect(c.jwt.accessTtlSeconds).toBe(900);
     expect(c.storage).toEqual({ driver: 'local', path: './storage', baseUrl: 'http://localhost:3001/api/v1/files' });
     expect(c.version).toBeNull();
+    expect(c.auth).toEqual({ maxFailedLogins: 5, lockoutMinutes: 15, rateLimitPerMinute: 10, refreshReuseGraceSeconds: 10 });
+    expect(c.webForwardSecret).toBeNull();
     expect(Object.isFrozen(c)).toBe(true);
+  });
+
+  it('treats an empty web forward secret as unset and rejects a short one', () => {
+    expect(loadConfig({ ...valid, WEB_FORWARD_SECRET: '' }).webForwardSecret).toBeNull();
+    expect(loadConfig({ ...valid, WEB_FORWARD_SECRET: 'f'.repeat(40) }).webForwardSecret).toBe('f'.repeat(40));
+    expect(() => loadConfig({ ...valid, WEB_FORWARD_SECRET: 'short' })).toThrow(/WEB_FORWARD_SECRET: .*at least 32/);
   });
 
   it('lists every problem by name and never echoes values', () => {

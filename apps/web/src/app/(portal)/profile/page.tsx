@@ -1,7 +1,10 @@
 import { ROLE_LABELS } from '@ipt/shared';
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { api } from '@/lib/api/server';
 import { requireSession } from '@/lib/auth';
 import { ProfileForm } from './profile-form';
 
@@ -9,7 +12,7 @@ export const metadata: Metadata = { title: 'My Profile' };
 
 export default async function ProfilePage() {
   const session = await requireSession();
-  const { profile } = session;
+  const { data: profile } = await api<{ email: string; fullName: string; phone: string | null; lastLoginAt: string | null }>('/me/profile');
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -34,15 +37,13 @@ export default async function ProfilePage() {
             <div>
               <dt className="text-muted-foreground">Region scope</dt>
               <dd className="font-medium">
-                {session.role === 'super_admin' || session.role === 'viewer'
-                  ? 'All regions'
-                  : session.regionNames.join(', ') || '—'}
+                {session.isGlobal ? 'All regions' : session.regionNames.join(', ') || 'Assigned sites only'}
               </dd>
             </div>
             <div>
               <dt className="text-muted-foreground">Last sign-in</dt>
               <dd className="font-medium">
-                {profile.last_login_at ? new Date(profile.last_login_at).toLocaleString('en-GB') : '—'}
+                {profile.lastLoginAt ? new Date(profile.lastLoginAt).toLocaleString('en-GB') : '—'}
               </dd>
             </div>
           </dl>
@@ -53,7 +54,23 @@ export default async function ProfilePage() {
           <CardTitle>Contact details</CardTitle>
         </CardHeader>
         <CardContent>
-          <ProfileForm fullName={profile.full_name} phone={profile.phone} />
+          <ProfileForm fullName={profile.fullName} phone={profile.phone} />
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Security</CardTitle>
+          <CardDescription>Changing your password signs you out on your other devices.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button asChild variant="outline">
+            <Link href="/change-password">Change password</Link>
+          </Button>
+          <form action="/auth/signout-everywhere" method="post">
+            <Button type="submit" variant="outline">
+              Sign out on all devices
+            </Button>
+          </form>
         </CardContent>
       </Card>
     </div>

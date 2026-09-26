@@ -1,13 +1,13 @@
 import type { NextRequest } from 'next/server';
+import { updateApiSession } from '@/lib/api/proxy-session';
 import { buildCsp, createNonce } from '@/lib/csp';
-import { publicEnv } from '@/lib/env';
-import { updateSession } from '@/lib/supabase/proxy';
 
 export async function proxy(request: NextRequest) {
   const nonce = createNonce();
-  const csp = buildCsp({ nonce, supabaseUrl: publicEnv().supabaseUrl, dev: process.env.NODE_ENV === 'development' });
+  // Pages not yet moved to the API still load images from the (legacy) Supabase project, when configured.
+  const csp = buildCsp({ nonce, supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL, dev: process.env.NODE_ENV === 'development' });
   // Next.js reads the nonce from the request's CSP header and applies it to its scripts.
-  const response = await updateSession(request, { 'x-nonce': nonce, 'Content-Security-Policy': csp });
+  const response = await updateApiSession(request, { 'x-nonce': nonce, 'Content-Security-Policy': csp });
   response.headers.set('Content-Security-Policy', csp);
   return response;
 }

@@ -1,31 +1,52 @@
 import { Injectable } from '@nestjs/common';
-import type { RoleCode } from '../authz/catalog.js';
+import { loadAccess, publicAccess, type UserAccess } from '../authz/access.js';
+import { userScope, within } from '../authz/scope.js';
+import type { AuthUser } from '../auth/auth-user.js';
 import { invalid, notFound, rethrowDbError } from '../common/prisma-errors.js';
 import { parseInput } from '../common/validation.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { RegionScopeInput, RolesInput, UserInput, UserPatch } from './users.schemas.js';
+import { OwnProfilePatch, RegionScopeInput, RolesInput, UserInput, UserListQuery, UserPatch } from './users.schemas.js';
 
 type Tx = Prisma.TransactionClient;
 
-/** Roles whose work is limited to the regions in their scope. */
-const SCOPED_ROLES: readonly string[] = ['REGIONAL_MANAGER', 'REGIONAL_SUPERVISOR'];
+/** Roles that see nothing without at least one region in their scope. */
+const SCOPED_ROLES: readonly string[] = ['REGIONAL_MANAGER', 'REGIONAL_SUPERVISOR', 'VIEWER'];
 /** Roles a technician may report to. */
 const LINE_MANAGER_ROLES: readonly string[] = ['REGIONAL_SUPERVISOR', 'REGIONAL_MANAGER'];
 
-export interface UserAccess {
-  id: string;
-  email: string;
-  fullName: string;
-  isActive: boolean;
-  roles: RoleCode[];
-  permissions: string[];
-  regionIds: string[];
-}
+/**
+ * The fields of a user the API returns. Never the password hash or the
+ * sign-in counters.
+ */
+export const USER_FIELDS = {
+  id: true,
+  email: true,
+  fullName: true,
+  phone: true,
+  employeeCode: true,
+  isActive: true,
+  homeRegionId: true,
+  reportsToId: true,
+  lastLoginAt: true,
+  mustChangePassword: true,
+  lockedUntil: true,
+  isDemo: true,
+  createdAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.UserSelect;
+
+const USER_DETAIL = {
+  ...USER_FIELDS,
+  homeRegion: { select: { id: true, code: true, name: true } },
+  reportsTo: { select: { id: true, fullName: true } },
+  roles: { select: { role: { select: { code: true, name: true } } } },
+  regionScopes: { select: { region: { select: { id: true, code: true, name: true } } } },
+} as const satisfies Prisma.UserSelect;
 
 /**
- * Users, their roles and their organisational scope. Passwords and sessions
- * are Phase 3; these rules hold for every caller.
+ * Users, their roles and their organisational scope. Sign-in and passwords
+ * are in AuthService; these rules hold for every caller.
  */
 @Injectable()
 export class UsersService {
@@ -50,6 +71,7 @@ export class UsersService {
             createdById: actorId,
             updatedById: actorId,
           },
+          select: USER_FIELDS,
         });
         await tx.userRole.createMany({ data: roleIds.map((roleId) => ({ userId: user.id, roleId, grantedById: actorId })) });
         if (data.regionScopeIds.length) {
@@ -73,6 +95,7 @@ export class UsersService {
         return tx.user.update({
           where: { id },
           data: { ...data, employeeCode: data.employeeCode === undefined ? undefined : data.employeeCode || null, updatedById: actorId },
+          select: USER_FIELDS,
         });
       })
       .catch(rethrowDbError);
@@ -113,8 +136,9 @@ export class UsersService {
   }
 
   /**
-   * Activates or deactivates a user. Deactivation ends the user's active site
-   * assignments (history kept) and never removes the last active Super Admin.
+   * Activates or deactivates a user. Deactivation ends the user's sessions and
+   * active site assignments (history kept) and never removes the last active
+   * Super Admin.
    */
   async setActive(userId: string, active: boolean, actorId: string | null) {
     return this.prisma.$transaction(async (tx) => {
@@ -129,37 +153,78 @@ export class UsersService {
             data: { active: false, endDate: a.startDate > today ? a.startDate : today, endReason: 'User deactivated', endedById: actorId },
           });
         }
+        const now = new Date();
+        await tx.refreshToken.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: now, revokedReason: 'USER_DEACTIVATED' } });
+        return tx.user.update({ where: { id: userId }, data: { isActive: false, sessionsValidAfter: now, updatedById: actorId }, select: USER_FIELDS });
       }
-      return tx.user.update({ where: { id: userId }, data: { isActive: active, updatedById: actorId } });
+      return tx.user.update({ where: { id: userId }, data: { isActive: active, updatedById: actorId }, select: USER_FIELDS });
     });
   }
 
-  /** Roles, permissions and region scope — what the Phase 3 guards check. */
+  /** Roles, permissions and region scope — what the guards check. */
   async getAccess(userId: string): Promise<UserAccess> {
     return this.accessOf(this.prisma, userId);
+  }
+
+  /** Users the caller may see, paginated, with filters. */
+  async listUsers(query: unknown, caller: AuthUser) {
+    const q = parseInput(UserListQuery, query);
+    const where = within<Prisma.UserWhereInput>(userScope(caller), {
+      AND: [
+        q.role ? { roles: { some: { role: { code: q.role } } } } : {},
+        q.regionId ? { OR: [{ homeRegionId: q.regionId }, { regionScopes: { some: { regionId: q.regionId } } }] } : {},
+        q.active === undefined ? {} : { isActive: q.active },
+        q.q ? { OR: [{ fullName: { contains: q.q } }, { email: { contains: q.q } }, { employeeCode: { contains: q.q } }] } : {},
+      ],
+    });
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where,
+        orderBy: [{ fullName: 'asc' }, { id: 'asc' }],
+        skip: (q.page - 1) * q.pageSize,
+        take: q.pageSize,
+        select: { ...USER_FIELDS, roles: { select: { role: { select: { code: true } } } } },
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+    return { items: items.map(({ roles, ...u }) => ({ ...u, roles: roles.map((r) => r.role.code).sort() })), total, page: q.page, pageSize: q.pageSize };
+  }
+
+  /** One user, if the caller may see them (otherwise "not found"). */
+  async getUser(id: string, caller: AuthUser) {
+    const user = await this.prisma.user.findFirst({ where: within<Prisma.UserWhereInput>(userScope(caller), { id }), select: USER_DETAIL });
+    if (!user) throw notFound('User');
+    const { roles, regionScopes, ...rest } = user;
+    return { ...rest, roles: roles.map((r) => r.role).sort((a, b) => a.code.localeCompare(b.code)), regions: regionScopes.map((s) => s.region) };
+  }
+
+  /** The caller's own profile. */
+  async ownProfile(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: USER_DETAIL });
+    if (!user) throw notFound('User');
+    const { roles, regionScopes, ...rest } = user;
+    return { ...rest, roles: roles.map((r) => r.role).sort((a, b) => a.code.localeCompare(b.code)), regions: regionScopes.map((s) => s.region) };
+  }
+
+  /** Users may change their own name and phone number; everything else is set by an administrator. */
+  async updateOwnProfile(userId: string, patch: unknown) {
+    const data = parseInput(OwnProfilePatch, patch);
+    await this.prisma.user.update({ where: { id: userId }, data: { ...data, updatedById: userId } });
+    return this.ownProfile(userId);
+  }
+
+  /** Throws "not found" unless the caller may see the user. */
+  async requireVisible(id: string, caller: AuthUser): Promise<void> {
+    const found = await this.prisma.user.count({ where: within<Prisma.UserWhereInput>(userScope(caller), { id }) });
+    if (!found) throw notFound('User');
   }
 
   // --- Helpers -------------------------------------------------------------------
 
   private async accessOf(db: Tx | PrismaService, userId: string): Promise<UserAccess> {
-    const user = await db.user.findUnique({
-      where: { id: userId },
-      include: {
-        roles: { include: { role: { include: { permissions: { include: { permission: { select: { code: true } } } } } } } },
-        regionScopes: { select: { regionId: true } },
-      },
-    });
-    if (!user) throw notFound('User');
-    const permissions = new Set(user.roles.flatMap((r) => r.role.permissions.map((p) => p.permission.code)));
-    return {
-      id: user.id,
-      email: user.email,
-      fullName: user.fullName,
-      isActive: user.isActive,
-      roles: user.roles.map((r) => r.role.code as RoleCode).sort(),
-      permissions: [...permissions].sort(),
-      regionIds: user.regionScopes.map((s) => s.regionId).sort(),
-    };
+    const access = await loadAccess(db, userId);
+    if (!access) throw notFound('User');
+    return publicAccess(access);
   }
 
   private async requireUser(id: string, db: Tx | PrismaService = this.prisma) {

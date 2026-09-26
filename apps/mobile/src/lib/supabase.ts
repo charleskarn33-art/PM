@@ -4,8 +4,12 @@ import { AppState } from 'react-native';
 import { mobileEnv } from './env';
 import { sessionStorage } from './session-storage';
 
-/** null when the app is not configured (a configuration screen is shown). */
-export const supabase: SupabaseClient<Database> | null = mobileEnv.ok
+/**
+ * Legacy data sync (offline store) until it moves to the API in Phase 7.
+ * Sign-in no longer uses Supabase. null when not configured.
+ */
+export const supabase: SupabaseClient<Database> | null =
+  mobileEnv.ok && mobileEnv.env.supabaseUrl && mobileEnv.env.supabaseKey
   ? createClient<Database>(mobileEnv.env.supabaseUrl, mobileEnv.env.supabaseKey, {
       auth: {
         storage: sessionStorage,

@@ -28,25 +28,35 @@ datasource db {
 // -----------------------------------------------------------------------------
 
 model User {
-  id           String    @id @default(uuid(7)) @db.Char(36)
+  id                 String    @id @default(uuid(7)) @db.Char(36)
   /// Stored lower-case; unique.
-  email        String    @unique @db.VarChar(254)
-  fullName     String    @map("full_name") @db.VarChar(120)
-  phone        String?   @db.VarChar(32)
-  employeeCode String?   @unique @map("employee_code") @db.VarChar(32)
+  email              String    @unique @db.VarChar(254)
+  fullName           String    @map("full_name") @db.VarChar(120)
+  phone              String?   @db.VarChar(32)
+  employeeCode       String?   @unique @map("employee_code") @db.VarChar(32)
   /// Argon2id hash; null until the user has set a password.
-  passwordHash String?   @map("password_hash") @db.VarChar(255)
-  isActive     Boolean   @default(true) @map("is_active")
+  passwordHash       String?   @map("password_hash") @db.VarChar(255)
+  isActive           Boolean   @default(true) @map("is_active")
   /// Home region (technicians, supervisors). Access scope is user_region_scopes.
-  homeRegionId String?   @map("home_region_id") @db.Char(36)
+  homeRegionId       String?   @map("home_region_id") @db.Char(36)
   /// Line manager, e.g. a technician's supervisor.
-  reportsToId  String?   @map("reports_to_id") @db.Char(36)
-  lastLoginAt  DateTime? @map("last_login_at")
-  isDemo       Boolean   @default(false) @map("is_demo")
-  createdAt    DateTime  @default(now()) @map("created_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
-  createdById  String?   @map("created_by") @db.Char(36)
-  updatedById  String?   @map("updated_by") @db.Char(36)
+  reportsToId        String?   @map("reports_to_id") @db.Char(36)
+  lastLoginAt        DateTime? @map("last_login_at")
+  /// Set when an administrator gives a temporary password: every route except
+  /// changing it is refused until the user sets their own.
+  mustChangePassword Boolean   @default(false) @map("must_change_password")
+  passwordChangedAt  DateTime? @map("password_changed_at")
+  /// Consecutive failed sign-ins; the account locks for a while at the limit.
+  failedLoginCount   Int       @default(0) @map("failed_login_count") @db.UnsignedSmallInt
+  lockedUntil        DateTime? @map("locked_until")
+  /// Access tokens issued before this moment are refused (sign-out everywhere,
+  /// password change, deactivation).
+  sessionsValidAfter DateTime? @map("sessions_valid_after")
+  isDemo             Boolean   @default(false) @map("is_demo")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+  createdById        String?   @map("created_by") @db.Char(36)
+  updatedById        String?   @map("updated_by") @db.Char(36)
 
   homeRegion    Region? @relation("UserHomeRegion", fields: [homeRegionId], references: [id], onDelete: Restrict)
   reportsTo     User?   @relation("UserReportsTo", fields: [reportsToId], references: [id], onDelete: Restrict)
@@ -57,6 +67,7 @@ model User {
   roles           UserRole[]        @relation("UserRoleUser")
   regionScopes    UserRegionScope[] @relation("UserRegionScopeUser")
   siteAssignments SiteAssignment[]  @relation("SiteAssignmentUser")
+  refreshTokens   RefreshToken[]
 
   // Audit back-relations (who created / changed what).
   usersCreated     User[]            @relation("UserCreatedBy")
@@ -79,6 +90,33 @@ model User {
   @@index([isActive])
   @@index([fullName])
   @@map("users")
+}
+
+/// One row per issued refresh token. Tokens rotate on every use: the used
+/// token is revoked and replaced within the same family. Presenting a revoked
+/// token again (reuse, e.g. a stolen copy) revokes the whole family.
+/// Only the token id is stored; the token itself is a signed JWT.
+model RefreshToken {
+  id            String    @id @db.Char(36)
+  userId        String    @map("user_id") @db.Char(36)
+  familyId      String    @map("family_id") @db.Char(36)
+  /// web | mobile — shown in the user's sessions and used in the audit log.
+  client        String    @db.VarChar(16)
+  userAgent     String?   @map("user_agent") @db.VarChar(255)
+  ipAddress     String?   @map("ip_address") @db.VarChar(45)
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+  /// ROTATED | LOGOUT | LOGOUT_ALL | REUSE_DETECTED | PASSWORD_CHANGED | USER_DEACTIVATED | PASSWORD_RESET
+  revokedReason String?   @map("revoked_reason") @db.VarChar(32)
+  replacedById  String?   @map("replaced_by_id") @db.Char(36)
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
 }
 
 /// Roles: SUPER_ADMIN, REGIONAL_MANAGER, REGIONAL_SUPERVISOR, TECHNICIAN,

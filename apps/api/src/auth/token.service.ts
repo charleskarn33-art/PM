@@ -8,15 +8,19 @@ const AUDIENCE = 'ipt-pm';
 export interface AccessClaims {
   sub: string;
   typ: 'access';
+  /** Issued at in milliseconds (`iat` is whole seconds): compared with the user's sessions_valid_after. */
+  ims: number;
+  exp: number;
 }
 
 export interface RefreshClaims {
   sub: string;
   typ: 'refresh';
-  /** Token id — stored server-side (Phase 3) so a token can be rotated and revoked. */
+  /** Token id — the refresh_tokens row, so a token can be rotated and revoked. */
   jti: string;
   /** Rotation family: reuse of an old token revokes the whole family. */
   fam: string;
+  exp: number;
 }
 
 /**
@@ -32,7 +36,7 @@ export class TokenService {
   ) {}
 
   signAccessToken(userId: string): Promise<string> {
-    return this.jwt.signAsync({ typ: 'access' }, {
+    return this.jwt.signAsync({ typ: 'access', ims: Date.now() }, {
       secret: this.config.jwt.accessSecret,
       algorithm: 'HS256',
       subject: userId,
@@ -57,7 +61,7 @@ export class TokenService {
   /** Claims of a valid, unexpired access token; null otherwise. */
   async verifyAccessToken(token: string): Promise<AccessClaims | null> {
     const claims = await this.verify(token, this.config.jwt.accessSecret);
-    return claims?.typ === 'access' && typeof claims.sub === 'string' ? (claims as unknown as AccessClaims) : null;
+    return claims?.typ === 'access' && typeof claims.sub === 'string' && typeof claims.ims === 'number' ? (claims as unknown as AccessClaims) : null;
   }
 
   /** Claims of a valid, unexpired refresh token; null otherwise. */

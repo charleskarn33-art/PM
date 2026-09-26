@@ -13,7 +13,12 @@ const USER = '0190f5a2-0000-7000-8000-000000000001';
 describe('TokenService', () => {
   it('issues access tokens that verify only as access tokens', async () => {
     const token = await svc.signAccessToken(USER);
-    expect(await svc.verifyAccessToken(token)).toMatchObject({ sub: USER, typ: 'access', iss: 'ipt-pm-api', aud: 'ipt-pm' });
+    const before = Date.now();
+    const claims = await svc.verifyAccessToken(token);
+    expect(claims).toMatchObject({ sub: USER, typ: 'access', iss: 'ipt-pm-api', aud: 'ipt-pm' });
+    // Millisecond issue time, compared with sessions_valid_after (sign-out everywhere).
+    expect(claims!.ims).toBeGreaterThan(before - 5_000);
+    expect(claims!.ims).toBeLessThanOrEqual(Date.now());
     expect(await svc.verifyRefreshToken(token)).toBeNull();
   });
 
