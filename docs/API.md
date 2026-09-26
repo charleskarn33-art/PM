@@ -124,7 +124,7 @@ OVERDUE at start-up and hourly.
 
 | Method | Path | Permission |
 |---|---|---|
-| POST | `/visits` | `pm_visits.perform` — `{ id?, scheduleId }` or `{ id?, siteId, templateCode? }`; only a technician assigned to the site; retrying with the same `id` returns the same visit |
+| POST | `/visits` | `pm_visits.perform` — `{ id?, scheduleId }` or `{ id?, siteId, templateCode? }`, plus `gps?: { latitude, longitude, accuracyM?, capturedAt? }` and `outsideRadiusReason?`; only a technician assigned to the site; retrying with the same `id` returns the same visit. The geofence (below) is checked against the position sent |
 | GET | `/visits?siteId&technicianId&status&mine&from&to`, `/visits/:id` | `pm_visits.read` (scoped) — the detail includes the template structure, answers, readings, photos, progress and open issues |
 | PUT | `/visits/:id/answers` | `pm_visits.perform`, own visit — `{ responses?, readings?, notApplicableSections?, overallComments? }`; all or nothing; an answer without values clears it; an edit with an older `clientUpdatedAt` than the stored one is skipped |
 | POST | `/visits/:id/complete` | `pm_visits.perform`, own visit — 422 `VISIT_INCOMPLETE` lists every missing answer, reading, comment, photo or inconsistency |
@@ -133,6 +133,8 @@ OVERDUE at start-up and hourly.
 | GET | `/visits/:id/photos/:photoId` | `pm_visits.read` (scoped) — the image |
 | DELETE | `/visits/:id/photos/:photoId` | `pm_visits.perform`, own editable visit |
 
+| PUT | `/visits/:id/signature` | `pm_visits.perform`, own editable visit — `{ name?, width, height, strokes: [[x, y], …][] }`; the server draws the signature (SVG); any later change to the visit clears it |
+| GET | `/visits/:id/signature` | `pm_visits.read` (scoped) — the image (`image/svg+xml`) |
 | PUT | `/visits/:id/battery-units` | `pm_visits.perform`, own visit — `{ units: [{ unitNumber, voltageV \| null, comment?, clientUpdatedAt? }] }`; only at sites with `batteryUnitCount`; every battery is then required before completion |
 
 The visit detail includes `modules` — the power-module records built from its
@@ -143,6 +145,23 @@ answers and readings (null for a section not applicable): `generator`, `dc`
 Visit flow: IN_PROGRESS → COMPLETED → APPROVED, or REJECTED → (technician
 edits) IN_PROGRESS → COMPLETED. Completion % counts required answers and
 readings in applicable sections (rounded down, so 100 % means complete).
+
+### PM start geofence
+
+Setting `geofence` (`mode`, `radiusM`; default WARN, 100 m); a site's
+`geofenceRadiusM` overrides the radius. **WARN** records the position and
+distance; **REQUIRE_REASON** needs `outsideRadiusReason` outside the radius or
+without a position (422 `REASON_REQUIRED`); **BLOCK** refuses (422
+`OUTSIDE_GEOFENCE`). A site without coordinates is never blocked. The position
+is what the phone reports; it is stored with the result (`gpsStatus`,
+`gpsDistanceM`, `gpsRadiusM`, `geofenceMode`).
+
+## Settings
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/settings` | signed in — `{ geofence: { mode, radiusM }, pm: { requireSignature } }` |
+| PUT | `/settings/:key` | `settings.manage` — `geofence` or `pm` |
 
 ## Site power history
 

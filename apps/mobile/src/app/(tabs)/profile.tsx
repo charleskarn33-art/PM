@@ -1,36 +1,12 @@
 import { ROLE_LABELS } from '@ipt/shared';
 import Constants from 'expo-constants';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SyncBar } from '@/components/sync-bar';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Card, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/providers/auth-provider';
-import { unregisterPush } from '@/lib/push';
-import { useOffline } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
 export default function ProfileScreen() {
   const { profile, signOut } = useAuth();
-  const { status, push } = useOffline();
-
-  async function doSignOut() {
-    await unregisterPush(push?.ok ? push.token : null);
-    await signOut();
-  }
-
-  function confirmSignOut() {
-    if (status.outbox.pending === 0) {
-      void doSignOut();
-      return;
-    }
-    Alert.alert(
-      'Unsent PM work',
-      `${status.outbox.pending} change(s) have not reached the server yet. They stay on this phone and are sent when you sign in again with this account. Sign out anyway?`,
-      [
-        { text: 'Stay signed in', style: 'cancel' },
-        { text: 'Sign out', style: 'destructive', onPress: () => void doSignOut() },
-      ],
-    );
-  }
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Card>
@@ -39,15 +15,10 @@ export default function ProfileScreen() {
         <Row label="Role" value={profile?.role ? ROLE_LABELS[profile.role] : '—'} />
         <Row label="Phone" value={profile?.phone || '—'} />
       </Card>
-      <SyncBar />
       <Card>
-        <Row
-          label="Push notifications"
-          value={push == null ? 'Checking…' : push.ok ? 'On for this phone' : `Off — ${push.reason}`}
-        />
         <Row label="App version" value={Constants.expoConfig?.version ?? 'unknown'} />
       </Card>
-      <PrimaryButton title="Sign out" variant="outline" onPress={confirmSignOut} />
+      <PrimaryButton title="Sign out" variant="outline" onPress={() => void signOut()} />
     </ScrollView>
   );
 }
@@ -63,7 +34,7 @@ function Row({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   container: { padding: spacing.lg, gap: spacing.lg },
-  row: { paddingVertical: spacing.sm },
-  label: { fontSize: 13, color: colors.textMuted, textTransform: 'uppercase', fontWeight: '600' },
-  value: { fontSize: 17, color: colors.text, marginTop: 2 },
+  row: { paddingVertical: spacing.sm, gap: spacing.xs },
+  label: { fontSize: 14, color: colors.textMuted },
+  value: { fontSize: 17, fontWeight: '600', color: colors.text },
 });

@@ -168,6 +168,28 @@ a written report, and **approval before the next phase**.
 - Site power history endpoint per module.
 - Not yet: charts and analytics thresholds (Phase 10).
 
+**Phase 6 — Mobile.**
+- API: `system_settings` (geofence WARN / REQUIRE_REASON / BLOCK with a
+  radius, default WARN 100 m; signature required, default on),
+  `sites.geofence_radius_m`, visit GPS and geofence result, technician
+  signature drawn by the server from the phone's strokes (cleared by any later
+  change, required before completion unless switched off).
+- Mobile app on the API: Home (counts and PMs to continue), My Sites (search),
+  PM Schedule (to do / done), site details (equipment, maps, recent visits,
+  unscheduled PM), Start PM (GPS fix, geofence check with the configured mode,
+  reason when required), visit overview (progress, sections, N/A switches,
+  comments), section screens for every answer type and readings, evidence
+  camera (compressed, uploaded), per-battery voltages, review with signature
+  and completion. Edits show at once and are saved in batches; the server's
+  progress and issues are shown after each save.
+- The Supabase-based mobile code (offline store, sync, push, notifications,
+  corrective-action screens) is removed; Phase 7 rebuilds offline work on the
+  API, Phase 8 corrective actions, Phase 12 notifications.
+- **The app currently needs a connection** to load and save (offline is Phase
+  7). It has not been run on a device in this environment: it typechecks,
+  lints, passes its unit tests and bundles for Android, and the request
+  shapes it sends were run against the real API.
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).

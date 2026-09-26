@@ -1,78 +1,69 @@
-import { Link } from 'expo-router';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
-import { Banner, Card, EmptyState, LoadingView, StatusPill } from '@/components/ui';
-import { SyncBar } from '@/components/sync-bar';
-import type { Site } from '@/offline/types';
-import { useLocalQuery, useOffline } from '@/providers/offline-provider';
-import { colors, spacing } from '@/theme';
+import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Banner, Card, EmptyState, LoadingView } from '@/components/ui';
+import type { Site } from '@/lib/api/types';
+import { useApi } from '@/lib/api/use-api';
+import { colors, radius, spacing, touchTarget } from '@/theme';
 
+/** The sites the technician is assigned to (the server applies the scope). */
 export default function SitesScreen() {
-  const { status, syncNow } = useOffline();
-  const query = useLocalQuery(async (store) => ({ sites: await store.sites(), hasData: await store.hasData() }), 'sites');
-  if (query.loading || !query.data) return <LoadingView label="Loading sites…" />;
+  const router = useRouter();
+  const [q, setQ] = useState('');
+  const [search, setSearch] = useState('');
+  const sites = useApi<Site[]>(`/sites?pageSize=100${search ? `&q=${encodeURIComponent(search)}` : ''}`);
 
   return (
-    <FlatList
-      data={[...query.data.sites].sort((a, b) => a.site_name.localeCompare(b.site_name))}
-      keyExtractor={(s) => s.id}
-      contentContainerStyle={styles.list}
-      refreshControl={<RefreshControl refreshing={status.syncing} onRefresh={() => void syncNow()} />}
-      ListHeaderComponent={
-        <View style={{ gap: spacing.md }}>
-          <SyncBar />
-          {query.error ? <Banner tone="danger" message={query.error} /> : null}
-        </View>
-      }
-      ListEmptyComponent={
-        query.data.hasData ? (
-          <EmptyState title="No assigned sites" message="Your supervisor has not assigned any sites to you yet." />
-        ) : (
-          <EmptyState title="Not downloaded yet" message="Connect to the Internet and pull down to download your sites." />
-        )
-      }
-      renderItem={({ item }) => <SiteCard site={item} />}
-    />
-  );
-}
-
-function SiteCard({ site }: { site: Site }) {
-  const power = [
-    site.generator_available && 'Generator',
-    site.battery_available && 'Battery',
-    site.solar_available && 'Solar',
-    site.grid_available && 'Grid',
-  ].filter(Boolean);
-  return (
-    <Link href={{ pathname: '/site/[id]', params: { id: site.id } }} asChild>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Open site ${site.site_code} ${site.site_name}`}
-      >
-        <Card>
-          <View style={styles.row}>
-            <Text style={styles.code}>{site.site_code}</Text>
-            <View style={styles.pills}>
-              {site.is_demo ? <StatusPill status="DEMO" tone="neutral" /> : null}
-              {site.status ? <StatusPill status={site.status} tone={site.status === 'ACTIVE' ? 'success' : 'neutral'} /> : null}
-            </View>
-          </View>
-          <Text style={styles.name}>{site.site_name}</Text>
-          <Text style={styles.meta}>
-            {[site.region_name, site.county_name].filter(Boolean).join(' · ') ||
-              'Location not set'}
-          </Text>
-          <Text style={styles.meta}>Power: {power.length ? power.join(', ') : 'Not recorded'}</Text>
-        </Card>
-      </Pressable>
-    </Link>
+    <View style={{ flex: 1 }}>
+      <TextInput
+        style={styles.search}
+        value={q}
+        onChangeText={setQ}
+        onSubmitEditing={() => setSearch(q.trim())}
+        placeholder="Search by site code or name"
+        placeholderTextColor={colors.textMuted}
+        returnKeyType="search"
+        accessibilityLabel="Search sites"
+      />
+      {sites.error ? <Banner tone="danger" message={sites.error} /> : null}
+      {sites.loading ? (
+        <LoadingView />
+      ) : (
+        <FlatList
+          data={sites.data ?? []}
+          keyExtractor={(s) => s.id}
+          contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}
+          refreshControl={<RefreshControl refreshing={sites.refreshing} onRefresh={() => void sites.reload()} />}
+          ListEmptyComponent={<EmptyState title="No sites" message={search ? 'No site matches your search.' : 'You are not assigned to any site yet.'} />}
+          renderItem={({ item: s }) => (
+            <Pressable accessibilityRole="button" onPress={() => router.push(`/site/${s.id}`)}>
+              <Card>
+                <Text style={styles.code}>{s.siteCode}</Text>
+                <Text style={styles.name}>{s.siteName}</Text>
+                <Text style={styles.meta}>{[s.region?.name, s.cluster?.name, s.county?.name].filter(Boolean).join(' · ')}</Text>
+              </Card>
+            </Pressable>
+          )}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  list: { padding: spacing.lg, gap: spacing.md, flexGrow: 1 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  pills: { flexDirection: 'row', gap: spacing.xs },
-  code: { fontSize: 14, fontWeight: '700', color: colors.textMuted },
-  name: { fontSize: 20, fontWeight: '800', color: colors.text, marginTop: spacing.xs },
-  meta: { fontSize: 15, color: colors.textMuted, marginTop: spacing.xs },
+  search: {
+    margin: spacing.lg,
+    marginBottom: 0,
+    minHeight: touchTarget,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.lg,
+    fontSize: 17,
+    backgroundColor: colors.white,
+    color: colors.text,
+  },
+  code: { fontSize: 14, fontWeight: '700', color: colors.red },
+  name: { fontSize: 18, fontWeight: '700', color: colors.text },
+  meta: { fontSize: 14, color: colors.textMuted, marginTop: spacing.xs },
 });

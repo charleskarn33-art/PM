@@ -1,57 +1,22 @@
 /**
- * Mobile PM model helpers (pure, unit-tested). Rules about completeness and
- * failures come from @ipt/shared so the phone agrees with the server.
+ * Pure helpers for the PM screens (unit-tested). The server decides what is
+ * valid and complete; these only shape what the phone shows and sends.
  */
-import type { ChecklistItem, ReadingField, ResponseValue, Tables } from '@ipt/shared';
+import type { Answer, ChecklistItem, ReadingField, ResponsePatch, ResponseRow, VisitIssue } from '@/lib/api/types';
 
-export type Item = Tables<'pm_checklist_items'>;
-export type Field = Tables<'pm_reading_fields'>;
-export type ResponseRow = ResponseValue & { comment: string | null };
-export type ReadingRow = Pick<Tables<'pm_readings'>, 'reading_field_id' | 'numeric_value' | 'text_value'>;
-
-export const EMPTY_RESPONSE = (itemId: string): ResponseRow => ({
-  checklist_item_id: itemId,
+export const EMPTY_RESPONSE = (checklistItemId: string): ResponseRow => ({
+  checklistItemId,
   answer: null,
-  numeric_value: null,
-  text_value: null,
-  selected_options: null,
-  date_value: null,
-  datetime_value: null,
+  numericValue: null,
+  textValue: null,
+  selectedOptions: null,
+  dateValue: null,
+  datetimeValue: null,
   comment: null,
+  isFailure: false,
 });
 
-/** Row sent to PostgREST (server fills snapshots, failure flag, audit columns). */
-export function responseUpsert(visitId: string, r: ResponseRow, now: string) {
-  return {
-    visit_id: visitId,
-    checklist_item_id: r.checklist_item_id,
-    answer: r.answer,
-    numeric_value: r.numeric_value,
-    text_value: r.text_value,
-    selected_options: r.selected_options,
-    date_value: r.date_value,
-    datetime_value: r.datetime_value,
-    comment: r.comment,
-    prompt_snapshot: '',
-    client_updated_at: now,
-  };
-}
-
-export function readingUpsert(visitId: string, r: ReadingRow, now: string) {
-  return {
-    visit_id: visitId,
-    reading_field_id: r.reading_field_id,
-    numeric_value: r.numeric_value,
-    text_value: r.text_value,
-    label_snapshot: '',
-    client_updated_at: now,
-  };
-}
-
-/**
- * Parses what a technician typed into a number field. Accepts a comma as the
- * decimal separator (common on phone keypads). Empty -> null (cleared).
- */
+/** What the technician typed into a number field; a comma is accepted as the decimal sign. Empty → null. */
 export function parseNumberInput(text: string): { value: number | null; error?: string } {
   const t = text.trim().replace(',', '.');
   if (t === '') return { value: null };
@@ -59,45 +24,96 @@ export function parseNumberInput(text: string): { value: number | null; error?: 
   return { value: Number(t) };
 }
 
-/** "████████░░ 80%" style progress text for accessibility labels and headers. */
-export function progressBarText(pct: number, width = 10): string {
-  const filled = Math.max(0, Math.min(width, Math.round((pct / 100) * width)));
-  return `${'█'.repeat(filled)}${'░'.repeat(width - filled)} ${Math.round(pct)}%`;
+/** The configured limits of a number (none are assumed). */
+export function numberProblem(value: number, rule: { minValue: number | null; maxValue: number | null; isInteger: boolean }): string | null {
+  if (rule.minValue != null && value < rule.minValue) return `Must be at least ${rule.minValue}`;
+  if (rule.maxValue != null && value > rule.maxValue) return `Must be at most ${rule.maxValue}`;
+  if (rule.isInteger && !Number.isInteger(value)) return 'Must be a whole number';
+  return null;
 }
 
-export function toChecklistItem(i: Item): ChecklistItem {
-  return i;
-}
-export function toReadingField(f: Field): ReadingField {
-  return f;
-}
-
-export function unitSuffix(unit: string | null | undefined): string {
-  return unit ? ` ${unit}` : '';
+export function limitsHint(rule: { minValue: number | null; maxValue: number | null; unit: string | null }): string | null {
+  const u = rule.unit ? ` ${rule.unit}` : '';
+  if (rule.minValue != null && rule.maxValue != null) return `${rule.minValue} – ${rule.maxValue}${u}`;
+  if (rule.minValue != null) return `≥ ${rule.minValue}${u}`;
+  if (rule.maxValue != null) return `≤ ${rule.maxValue}${u}`;
+  return null;
 }
 
-/** Numeric value entered for a keyed reading or item in this visit (null if blank). */
-export function keyedValue(
-  key: string,
-  fields: readonly Field[],
-  items: readonly Item[],
-  readings: ReadonlyMap<string, ReadingRow>,
-  responses: ReadonlyMap<string, ResponseRow>,
-): number | null {
-  const f = fields.find((x) => x.analytics_key === key);
-  if (f) return readings.get(f.id)?.numeric_value ?? null;
-  const i = items.find((x) => x.analytics_key === key);
-  return i ? (responses.get(i.id)?.numeric_value ?? null) : null;
+export const answerLabel = (a: Answer) => (a === 'NA' ? 'N/A' : a === 'YES' ? 'Yes' : 'No');
+
+export function isFailureAnswer(item: ChecklistItem, answer: Answer | null | undefined): boolean {
+  return item.failureOnAnswer != null && answer === item.failureOnAnswer;
 }
 
-/** Phase-current values entered in this visit, by phase number. */
-export function phaseCurrents(items: readonly Item[], responses: ReadonlyMap<string, ResponseRow>): { phase: number; amps: number }[] {
-  return items
-    .filter((i) => i.analytics_key === 'dc.phase_current')
-    .flatMap((i) => {
-      const amps = responses.get(i.id)?.numeric_value;
-      const phase = Number((i.metadata as { phase_number?: number }).phase_number);
-      return amps == null || !Number.isFinite(phase) ? [] : [{ phase, amps }];
-    })
-    .sort((a, b) => a.phase - b.phase);
+export function needsComment(item: ChecklistItem, r: ResponseRow | undefined): boolean {
+  const a = r?.answer ?? null;
+  return (isFailureAnswer(item, a) && item.requiresCommentOnFailure) || (a != null && item.commentOnAnswers.includes(a));
+}
+
+export function needsPhoto(item: ChecklistItem, r: ResponseRow | undefined): boolean {
+  const a = r?.answer ?? null;
+  if (item.responseType === 'PHOTO') return item.isRequired && a !== 'NA';
+  return (isFailureAnswer(item, a) && item.requiresPhotoOnFailure) || (a != null && item.photoOnAnswers.includes(a));
+}
+
+/** Applies an edit to the shown answer straight away (the server's copy replaces it after saving). */
+export function applyPatch(current: ResponseRow | undefined, itemId: string, patch: ResponsePatch, item: ChecklistItem): ResponseRow {
+  const next = { ...(current ?? EMPTY_RESPONSE(itemId)), ...patch };
+  return { ...next, isFailure: isFailureAnswer(item, next.answer) };
+}
+
+/** The request body for one answer: the full current value, so the server stores exactly what is shown. */
+export function responseBody(r: ResponseRow, clientUpdatedAt: string) {
+  return {
+    checklistItemId: r.checklistItemId,
+    answer: r.answer,
+    numericValue: r.numericValue,
+    textValue: r.textValue,
+    selectedOptions: r.selectedOptions,
+    dateValue: r.dateValue,
+    datetimeValue: r.datetimeValue,
+    comment: r.comment,
+    clientUpdatedAt,
+  };
+}
+
+export function readingBody(field: ReadingField, value: number | string | null, clientUpdatedAt: string) {
+  return field.valueType === 'NUMBER'
+    ? { readingFieldId: field.id, numericValue: typeof value === 'number' ? value : null, clientUpdatedAt }
+    : { readingFieldId: field.id, textValue: typeof value === 'string' && value.trim() ? value.trim() : null, clientUpdatedAt };
+}
+
+export const ISSUE_TEXT: Record<VisitIssue['kind'], string> = {
+  REQUIRED: 'Answer required',
+  COMMENT_REQUIRED: 'Comment required',
+  PHOTO_REQUIRED: 'Photo required',
+  INCONSISTENT: 'Values do not match',
+  SIGNATURE_REQUIRED: 'Signature required',
+};
+
+/** Issues grouped by section code, in the order given (visit-level ones under ''). */
+export function issuesBySection(issues: readonly VisitIssue[]): Map<string, VisitIssue[]> {
+  const out = new Map<string, VisitIssue[]>();
+  for (const i of issues) out.set(i.sectionCode, [...(out.get(i.sectionCode) ?? []), i]);
+  return out;
+}
+
+/** "Unable to complete: 3 items need attention." */
+export function completionMessage(count: number): string {
+  return count === 0 ? 'Ready to complete.' : `Unable to complete: ${count} item${count === 1 ? ' needs' : 's need'} attention.`;
+}
+
+export function formatDistance(m: number | null): string {
+  if (m == null) return 'unknown distance';
+  return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(1)} km`;
+}
+
+/** Due-date wording for a schedule, relative to today (YYYY-MM-DD). */
+export function dueText(dueDate: string, today: string): string {
+  const days = Math.round((Date.parse(`${dueDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+  if (days === 0) return 'Due today';
+  if (days === 1) return 'Due tomorrow';
+  if (days > 1) return `Due in ${days} days`;
+  return days === -1 ? 'Overdue by 1 day' : `Overdue by ${-days} days`;
 }

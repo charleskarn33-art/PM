@@ -1,133 +1,95 @@
-import { humanizeStatus, PM_STATUS_TONE, toIsoDate } from '@ipt/shared';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { PM_STATUS_TONE } from '@ipt/shared';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Linking, Platform, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Banner, Card, EmptyState, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
+import { Banner, Card, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
+import type { Schedule, Site, VisitSummary } from '@/lib/api/types';
+import { useApi } from '@/lib/api/use-api';
 import { mapsUrl, webMapsUrl } from '@/lib/maps';
-import { useLocalQuery, useOffline } from '@/providers/offline-provider';
 import { colors, spacing } from '@/theme';
 
-export default function SiteDetailScreen() {
+const yesNo = (v: boolean) => (v ? 'Yes' : 'No');
+
+/** Site details, its open PMs and recent visits; start an unscheduled PM. */
+export default function SiteScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { status, syncNow } = useOffline();
-  const query = useLocalQuery((store) => store.site(id), `site:${id}`);
+  const router = useRouter();
+  const site = useApi<Site>(`/sites/${id}`);
+  const schedules = useApi<Schedule[]>(`/pm-schedules?siteId=${id}&mine=true&pageSize=20`);
+  const visits = useApi<VisitSummary[]>(`/visits?siteId=${id}&pageSize=10`);
 
-  if (query.loading) return <LoadingView label="Loading site…" />;
-  const site = query.data;
-  if (!site) {
-    return (
-      <>
-        <Stack.Screen options={{ title: 'Site' }} />
-        {query.error ? <Banner tone="danger" message={query.error} /> : null}
-        <EmptyState title="Site not available" message="This site is not assigned to you or no longer exists." />
-      </>
-    );
-  }
-
-  const today = toIsoDate(new Date());
-  const overdue = site.next_pm_due != null && (site.next_pm_status === 'OVERDUE' || site.next_pm_due < today);
-  const power = [
-    site.generator_available && 'Generator',
-    site.battery_available && 'Battery',
-    site.solar_available && 'Solar',
-    site.grid_available && 'Grid',
-  ].filter(Boolean);
-  const hasCoords = site.latitude != null && site.longitude != null;
+  if (site.loading) return <LoadingView />;
+  if (!site.data) return <Banner tone="danger" message={site.error ?? 'Site not found.'} />;
+  const s = site.data;
+  const lat = s.latitude == null ? null : Number(s.latitude);
+  const lng = s.longitude == null ? null : Number(s.longitude);
+  const label = `${s.siteCode} ${s.siteName}`;
 
   async function openMaps() {
-    if (!hasCoords || !site) return;
-    const url = mapsUrl(Platform.OS, site.latitude!, site.longitude!, `${site.site_code} ${site.site_name}`);
-    const fallback = webMapsUrl(site.latitude!, site.longitude!);
-    try {
-      await Linking.openURL((await Linking.canOpenURL(url)) ? url : fallback);
-    } catch {
-      await Linking.openURL(fallback);
-    }
+    if (lat == null || lng == null) return;
+    const url = mapsUrl(Platform.OS, lat, lng, label);
+    if (await Linking.canOpenURL(url).catch(() => false)) await Linking.openURL(url);
+    else await Linking.openURL(webMapsUrl(lat, lng));
   }
 
   return (
-    <>
-      <Stack.Screen options={{ title: site.site_code ?? 'Site' }} />
-      <ScrollView
-        contentContainerStyle={styles.container}
-        refreshControl={<RefreshControl refreshing={status.syncing} onRefresh={() => void syncNow()} />}
-      >
-        {query.error ? <Banner tone="danger" message={query.error} /> : null}
-        <View>
-          <Text style={styles.name}>{site.site_name}</Text>
-          <View style={styles.pills}>
-            <StatusPill status={site.status ?? 'ACTIVE'} tone={site.status === 'ACTIVE' ? 'success' : 'neutral'} />
-            {site.is_demo ? <StatusPill status="DEMO" tone="neutral" /> : null}
-          </View>
-        </View>
+    <ScrollView
+      contentContainerStyle={styles.container}
+      refreshControl={<RefreshControl refreshing={site.refreshing} onRefresh={() => void Promise.all([site.reload(), schedules.reload(), visits.reload()])} />}
+    >
+      <Stack.Screen options={{ title: s.siteCode }} />
+      <Card style={{ gap: spacing.xs }}>
+        <Text style={styles.name}>{s.siteName}</Text>
+        <Text style={styles.meta}>{[s.region?.name, s.cluster?.name, s.county?.name].filter(Boolean).join(' · ')}</Text>
+        {s.address ? <Text style={styles.meta}>{s.address}</Text> : null}
+        <Text style={styles.meta}>{lat != null && lng != null ? `GPS ${lat.toFixed(5)}, ${lng.toFixed(5)}` : 'No GPS coordinates recorded'}</Text>
+        {lat != null ? <PrimaryButton title="Open in maps" variant="outline" onPress={() => void openMaps()} /> : null}
+      </Card>
+      <Card>
+        <Row label="Generator" value={yesNo(s.generatorAvailable)} />
+        <Row label="Solar" value={yesNo(s.solarAvailable)} />
+        <Row label="Grid" value={yesNo(s.gridAvailable)} />
+        <Row label="Batteries" value={s.batteryUnitCount ? `${s.batteryUnitCount} (each recorded)` : (s.batteryConfiguration ?? '—')} />
+        {s.powerConfiguration ? <Row label="Power" value={s.powerConfiguration} /> : null}
+      </Card>
 
-        <Card>
-          <Row label="Region" value={site.region_name} />
-          <Row label="Cluster" value={site.cluster_name} />
-          <Row label="County" value={site.county_name} />
-          <Row label="Supervisor" value={site.supervisor_name} />
-          <Row label="Power" value={power.length ? power.join(', ') : 'Not recorded'} />
-          {site.power_configuration ? <Row label="Configuration" value={site.power_configuration} /> : null}
+      <Text style={styles.heading}>My PMs at this site</Text>
+      {(schedules.data ?? []).filter((x) => x.status !== 'CANCELLED').slice(0, 5).map((x) => (
+        <Card key={x.id} style={styles.line}>
+          <Text style={styles.meta}>Due {x.dueDate}</Text>
+          <StatusPill status={x.status} tone={PM_STATUS_TONE[x.status]} />
         </Card>
+      ))}
+      <PrimaryButton title="Start unscheduled PM" onPress={() => router.push({ pathname: '/pm/start', params: { siteId: s.id, siteName: `${s.siteCode} · ${s.siteName}` } })} />
 
-        <Card>
-          <Row
-            label="Next PM"
-            value={site.next_pm_due ?? 'Not scheduled'}
-            right={
-              site.next_pm_status ? (
-                <StatusPill
-                  status={overdue ? 'OVERDUE' : site.next_pm_status}
-                  tone={overdue ? 'danger' : PM_STATUS_TONE[site.next_pm_status]}
-                />
-              ) : null
-            }
-          />
-          <Row label="Last PM" value={site.last_pm_at ? new Date(site.last_pm_at).toLocaleDateString('en-GB') : '—'} />
-          <Row label="Open failures" value={String(site.open_failures ?? 0)} />
-          <Row label="Open corrective actions" value={String(site.open_corrective_actions ?? 0)} />
+      <Text style={styles.heading}>Recent visits</Text>
+      {visits.data?.length ? null : <Text style={styles.meta}>No visits yet.</Text>}
+      {(visits.data ?? []).map((v) => (
+        <Card key={v.id} style={styles.line}>
+          <Text style={styles.meta}>
+            {v.startedAt.slice(0, 10)} · {Math.floor(v.completionPct)}% · {v.failureCount} failure{v.failureCount === 1 ? '' : 's'}
+          </Text>
+          <StatusPill status={v.status} tone={PM_STATUS_TONE[v.status]} />
         </Card>
-
-        <Card>
-          <Row
-            label="Coordinates"
-            value={hasCoords ? `${site.latitude}, ${site.longitude}` : 'Not recorded'}
-          />
-          {site.address ? <Row label="Directions" value={site.address} /> : null}
-          {hasCoords ? (
-            <View style={{ marginTop: spacing.md }}>
-              <PrimaryButton title="Open in Maps" variant="outline" onPress={() => void openMaps()} />
-            </View>
-          ) : (
-            <Text style={styles.warn}>
-              No site coordinates: GPS check-in cannot confirm you are on site. Tell your supervisor.
-            </Text>
-          )}
-        </Card>
-        <Text style={styles.note}>Site status: {humanizeStatus(site.status ?? '')}</Text>
-      </ScrollView>
-    </>
+      ))}
+    </ScrollView>
   );
 }
 
-function Row({ label, value, right }: { label: string; value: string | null; right?: React.ReactNode }) {
+function Row({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.row}>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.label}>{label}</Text>
-        <Text style={styles.value}>{value ?? '—'}</Text>
-      </View>
-      {right}
+      <Text style={styles.meta}>{label}</Text>
+      <Text style={styles.value}>{value}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: spacing.lg, gap: spacing.lg },
-  name: { fontSize: 24, fontWeight: '800', color: colors.text },
-  pills: { flexDirection: 'row', gap: spacing.xs, marginTop: spacing.sm },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing.sm, gap: spacing.md },
-  label: { fontSize: 13, color: colors.textMuted, textTransform: 'uppercase', fontWeight: '600' },
-  value: { fontSize: 17, color: colors.text, marginTop: 2 },
-  warn: { marginTop: spacing.md, fontSize: 15, color: '#b45309' },
-  note: { fontSize: 13, color: colors.textMuted, textAlign: 'center' },
+  container: { padding: spacing.lg, gap: spacing.md },
+  name: { fontSize: 22, fontWeight: '800', color: colors.text },
+  meta: { fontSize: 15, color: colors.textMuted },
+  heading: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: spacing.md },
+  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: spacing.xs },
+  value: { fontSize: 16, fontWeight: '600', color: colors.text, flexShrink: 1, textAlign: 'right' },
+  line: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
 });

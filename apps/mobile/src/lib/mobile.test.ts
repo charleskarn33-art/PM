@@ -95,14 +95,8 @@ describe('utf8', () => {
 });
 
 describe('readMobileEnv', () => {
-  it('needs the API URL; Supabase is optional (legacy sync only)', () => {
-    expect(readMobileEnv({ EXPO_PUBLIC_API_URL: 'https://api.example.com/' })).toEqual({
-      ok: true,
-      env: { apiUrl: 'https://api.example.com', supabaseUrl: null, supabaseKey: null },
-    });
-    expect(
-      readMobileEnv({ EXPO_PUBLIC_API_URL: 'https://api.example.com', EXPO_PUBLIC_SUPABASE_URL: 'https://x.supabase.co', EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'k' }),
-    ).toEqual({ ok: true, env: { apiUrl: 'https://api.example.com', supabaseUrl: 'https://x.supabase.co', supabaseKey: 'k' } });
+  it('needs the API URL', () => {
+    expect(readMobileEnv({ EXPO_PUBLIC_API_URL: 'https://api.example.com/' })).toEqual({ ok: true, env: { apiUrl: 'https://api.example.com' } });
     expect(readMobileEnv({})).toMatchObject({ ok: false, error: expect.stringMatching(/EXPO_PUBLIC_API_URL/) });
   });
   it('requires https except for a local development server', () => {
@@ -111,10 +105,6 @@ describe('readMobileEnv', () => {
       expect(readMobileEnv({ EXPO_PUBLIC_API_URL: url }).ok).toBe(true);
     }
     expect(readMobileEnv({ EXPO_PUBLIC_API_URL: 'not a url' }).ok).toBe(false);
-  });
-  it('refuses secret keys', () => {
-    const secret = readMobileEnv({ EXPO_PUBLIC_API_URL: 'https://api.example.com', EXPO_PUBLIC_SUPABASE_URL: 'https://x.supabase.co', EXPO_PUBLIC_SUPABASE_ANON_KEY: 'sb_secret_123' });
-    expect(secret).toMatchObject({ ok: false, error: expect.stringMatching(/secret/) });
   });
 });
 

@@ -1,19 +1,12 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { PmVisitProvider } from '@/pm/context';
+import { VisitProvider } from '@/pm/visit-context';
 import { colors } from '@/theme';
 
-export default function PmVisitLayout() {
+export default function VisitLayout() {
   const { visitId } = useLocalSearchParams<{ visitId: string }>();
   return (
-    <PmVisitProvider visitId={visitId}>
-      <Stack
-        screenOptions={{
-          headerStyle: { backgroundColor: colors.navy },
-          headerTintColor: colors.white,
-          headerTitleStyle: { fontWeight: '700' },
-          contentStyle: { backgroundColor: colors.background },
-        }}
-      />
-    </PmVisitProvider>
+    <VisitProvider visitId={visitId}>
+      <Stack screenOptions={{ headerStyle: { backgroundColor: colors.navy }, headerTintColor: colors.white, headerTitleStyle: { fontWeight: '700' } }} />
+    </VisitProvider>
   );
 }

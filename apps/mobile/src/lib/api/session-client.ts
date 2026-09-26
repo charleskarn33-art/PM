@@ -138,6 +138,36 @@ export class SessionClient {
     }
   }
 
+  /** An authenticated multipart upload (photos). Retried once after a refresh on 401. */
+  async upload<T>(path: string, form: FormData): Promise<{ data: T }> {
+    const send = async (token: string) => {
+      let res: Response;
+      try {
+        res = await this.fetchFn(`${this.opts.apiUrl}/api/v1${path}`, {
+          method: 'POST',
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+          body: form,
+          signal: AbortSignal.timeout(60_000),
+        });
+      } catch {
+        throw new ApiError(0, 'OFFLINE', 'No connection to the server.');
+      }
+      const json = (await res.json().catch(() => null)) as { data?: T; error?: { code: string; message: string; details?: unknown } } | null;
+      if (!res.ok) throw new ApiError(res.status, json?.error?.code ?? `HTTP_${res.status}`, json?.error?.message ?? 'The upload failed.', json?.error?.details);
+      return { data: json?.data as T };
+    };
+    const token = await this.accessToken();
+    if (!token) throw new ApiError(401, 'UNAUTHORIZED', 'Sign in required.');
+    try {
+      return await send(token);
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 401) throw e;
+      const fresh = await this.refresh(true);
+      if (!fresh) throw e;
+      return send(fresh.accessToken);
+    }
+  }
+
   /** A usable access token, refreshed when about to expire; null when signed out. */
   async accessToken(): Promise<string | null> {
     const s = await this.load();

@@ -1,48 +1,30 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useState } from 'react';
+import { View } from 'react-native';
 import { CameraCapture } from '@/components/camera-capture';
-import { LoadingView } from '@/components/ui';
-import { photoPaths } from '@/offline/types';
-import { usePmVisitContext } from '@/pm/context';
-import { useOffline } from '@/providers/offline-provider';
+import { Banner } from '@/components/ui';
+import { useVisit } from '@/pm/visit-context';
 
-export default function PmCameraScreen() {
-  const { itemId, sectionId } = useLocalSearchParams<{ itemId?: string; sectionId?: string }>();
-  const pm = usePmVisitContext();
-  const { store, changed } = useOffline();
+/** Evidence photo for one question: captured, compressed on the phone, uploaded to the visit. */
+export default function VisitCameraScreen() {
+  const { itemId, caption } = useLocalSearchParams<{ itemId?: string; caption?: string }>();
+  const pm = useVisit();
   const router = useRouter();
-  const item = pm.items.find((i) => i.id === itemId);
-  if (!pm.visit || !store) return <LoadingView />;
-  const visit = pm.visit;
-
+  const [error, setError] = useState<string | null>(null);
   return (
-    <CameraCapture
-      caption={`${item ? item.prompt : 'Photo'}${item?.photo_instructions ? ` — ${item.photo_instructions}` : ''}`}
-      onCaptured={async ({ id, stored, position, takenAt }) => {
-        const paths = photoPaths(visit.site_id, visit.id, id);
-        await store.addPhoto({
-          row: {
-            id,
-            site_id: visit.site_id,
-            visit_id: visit.id,
-            section_id: sectionId ?? item?.section_id ?? null,
-            checklist_item_id: itemId ?? null,
-            bucket: 'pm-photos',
-            file_path: paths.file,
-            thumbnail_path: paths.thumb,
-            mime_type: 'image/jpeg',
-            size_bytes: stored.sizeBytes,
-            width: stored.width,
-            height: stored.height,
-            latitude: position?.latitude ?? null,
-            longitude: position?.longitude ?? null,
-            taken_at: takenAt,
-          },
-          local_uri: stored.uri,
-          thumb_uri: stored.thumbUri,
-        });
-        changed();
-        router.back();
-      }}
-    />
+    <View style={{ flex: 1 }}>
+      {error ? <Banner tone="danger" message={error} /> : null}
+      <CameraCapture
+        caption={caption ?? 'Evidence photo'}
+        onCaptured={async (photo) => {
+          const message = await pm.addPhoto({ id: photo.id, uri: photo.stored.uri, checklistItemId: itemId ?? null, caption, takenAt: photo.takenAt });
+          if (message) {
+            setError(`${message} The photo was not added; take it again when connected.`);
+            throw new Error(message); // lets the camera screen take another
+          }
+          router.back();
+        }}
+      />
+    </View>
   );
 }

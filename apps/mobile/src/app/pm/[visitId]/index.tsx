@@ -1,113 +1,84 @@
-import { formatDistance, humanizeStatus, PM_STATUS_TONE } from '@ipt/shared';
-import { Link, Stack } from 'expo-router';
+import { PM_STATUS_TONE } from '@ipt/shared';
+import { Stack, useRouter } from 'expo-router';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { Banner, Card, LoadingView, StatusPill } from '@/components/ui';
-import { usePmVisitContext } from '@/pm/context';
-import { VisitSyncNotice } from '@/pm/sync-notice';
-import { ProgressBar } from '@/pm/controls';
+import { Banner, Card, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
+import { ProgressBar, TextField } from '@/components/answer-controls';
+import { useVisit } from '@/pm/visit-context';
 import { colors, spacing, toneColors } from '@/theme';
 
-export default function PmVisitScreen() {
-  const pm = usePmVisitContext();
-  if (pm.loading) return <LoadingView label="Loading PM checklist…" />;
-  if (!pm.visit) {
-    return (
-      <View style={{ padding: spacing.lg }}>
-        <Banner tone="danger" message={pm.error ?? 'PM visit not found.'} />
-      </View>
-    );
-  }
-  const { visit } = pm;
-  const na = new Set(visit.not_applicable_sections);
+/** Visit overview: progress, sections (with N/A switches), comments, then review & complete. */
+export default function VisitScreen() {
+  const pm = useVisit();
+  const router = useRouter();
+  if (pm.loading) return <LoadingView />;
+  if (!pm.visit) return <Banner tone="danger" message={pm.error ?? 'PM not found.'} />;
+  const v = pm.visit;
+  const na = new Set(v.notApplicableSections);
+  const sectionIssues = (code: string) => v.issues.filter((i) => i.sectionCode === code).length;
 
   return (
-    <>
-      <Stack.Screen options={{ title: pm.site ? `${pm.site.site_code} PM` : 'PM' }} />
-      <ScrollView contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={false} onRefresh={pm.reload} />}>
-        <View>
-          <Text style={styles.site}>{pm.site?.site_name}</Text>
-          <View style={styles.row}>
-            <StatusPill status={visit.status} tone={PM_STATUS_TONE[visit.status]} />
-            {pm.progress.failureCount > 0 ? <StatusPill status={`${pm.progress.failureCount} failure(s)`} tone="danger" /> : null}
-          </View>
+    <ScrollView contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={false} onRefresh={() => void pm.reload()} />}>
+      <Stack.Screen options={{ title: v.site.siteCode }} />
+      <Card style={{ gap: spacing.sm }}>
+        <View style={styles.line}>
+          <Text style={styles.site}>{v.site.siteName}</Text>
+          <StatusPill status={v.status} tone={PM_STATUS_TONE[v.status]} />
         </View>
-        {visit.status === 'REJECTED' && visit.review_comments ? (
-          <Banner tone="danger" message={`Returned by supervisor: ${visit.review_comments}`} />
-        ) : null}
-        <VisitSyncNotice pm={pm} />
-        {visit.gps_status ? (
-          <Banner
-            tone={visit.gps_status === 'WITHIN_RADIUS' ? 'success' : 'warning'}
-            message={`GPS check-in: ${humanizeStatus(visit.gps_status).toLowerCase()}${
-              visit.gps_distance_m != null ? ` (${formatDistance(visit.gps_distance_m)} from site, radius ${visit.gps_radius_m ?? '—'} m)` : ''
-            }${visit.outside_radius_reason ? ` — reason: ${visit.outside_radius_reason}` : ''}`}
-          />
-        ) : null}
-        <Card>
-          <ProgressBar pct={pm.progress.completionPct} />
-          <Text style={styles.meta}>
-            {pm.issues.length === 0 ? 'Everything required is complete.' : `${pm.issues.length} item(s) still need attention.`}
-          </Text>
-        </Card>
+        <Text style={styles.meta}>
+          {v.template.name} (v{v.template.version}) · started {v.startedAt.slice(0, 16).replace('T', ' ')}
+        </Text>
+        <ProgressBar pct={v.progress.completionPct} />
+        <Text style={[styles.meta, v.progress.failureCount > 0 && { color: toneColors.danger.fg, fontWeight: '700' }]}>Failures recorded: {v.progress.failureCount}</Text>
+        {v.gpsStatus === 'OUTSIDE_RADIUS' ? <Text style={styles.meta}>Started {Math.round(v.gpsDistanceM ?? 0)} m from the site.</Text> : null}
+      </Card>
+      {v.status === 'REJECTED' && v.reviewComments ? <Banner tone="danger" message={`Returned by your supervisor: ${v.reviewComments}`} /> : null}
+      {pm.saveError ? <Banner tone="danger" message={pm.saveError} /> : null}
+      {!pm.editable ? <Banner tone="info" message="This PM is completed and can no longer be changed." /> : null}
 
-        {pm.sections.map((section) => {
-          const p = pm.progress.sections.find((s) => s.code === section.code);
-          const isNa = na.has(section.code);
-          return (
-            <Card key={section.id} style={isNa ? { opacity: 0.7 } : undefined}>
-              <Link href={{ pathname: '/pm/[visitId]/section/[sectionId]', params: { visitId: visit.id, sectionId: section.id } }} asChild disabled={isNa}>
-                <Pressable accessibilityRole="button" accessibilityLabel={`Open ${section.name}`} style={styles.sectionHead}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.sectionName}>{section.name}</Text>
-                    <Text style={styles.meta}>
-                      {isNa ? 'Not applicable' : `${p?.done ?? 0} of ${p?.required ?? 0} required done`}
-                      {!isNa && p?.failures ? ` · ${p.failures} failure(s)` : ''}
-                    </Text>
-                  </View>
-                  {!isNa ? (
-                    <Text style={[styles.count, { color: p && p.done === p.required ? toneColors.success.fg : colors.textMuted }]}>
-                      {p && p.required > 0 ? `${Math.round((100 * p.done) / p.required)}%` : '—'}
-                    </Text>
-                  ) : null}
-                </Pressable>
-              </Link>
-              {section.allow_not_applicable && pm.editable ? (
-                <View style={styles.naRow}>
-                  <Text style={styles.meta}>Section not applicable on this site</Text>
-                  <Switch
-                    value={isNa}
-                    onValueChange={(v) => void pm.setSectionNotApplicable(section.code, v)}
-                    accessibilityLabel={`Mark ${section.name} not applicable`}
-                  />
-                </View>
-              ) : null}
-            </Card>
-          );
-        })}
-
-        {pm.editable ? (
-          <Link href={{ pathname: '/pm/[visitId]/submit', params: { visitId: visit.id } }} asChild>
-            <Pressable accessibilityRole="button" style={styles.submit}>
-              <Text style={styles.submitText}>Review & submit PM</Text>
+      {v.sections.map((s) => {
+        const p = v.progress.sections.find((x) => x.code === s.code);
+        const isNa = na.has(s.code);
+        const issues = sectionIssues(s.code);
+        return (
+          <Card key={s.id} style={{ gap: spacing.sm }}>
+            <Pressable accessibilityRole="button" disabled={isNa} onPress={() => router.push(`/pm/${v.id}/section/${s.id}`)} style={styles.line}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.section, isNa && { color: colors.textMuted }]}>{s.name}</Text>
+                <Text style={styles.meta}>
+                  {isNa ? 'Not applicable' : `${p?.done ?? 0} of ${p?.required ?? 0} required done${p?.failures ? ` · ${p.failures} failure${p.failures === 1 ? '' : 's'}` : ''}`}
+                </Text>
+              </View>
+              {!isNa && issues === 0 && (p?.required ?? 0) > 0 ? <Text style={[styles.badge, { color: toneColors.success.fg }]}>✓</Text> : null}
+              {!isNa && issues > 0 ? <Text style={[styles.badge, { color: toneColors.warning.fg }]}>{issues}</Text> : null}
             </Pressable>
-          </Link>
-        ) : (
-          <Banner tone="info" message={`This PM is ${humanizeStatus(visit.status).toLowerCase()} and can no longer be edited.`} />
-        )}
-      </ScrollView>
-    </>
+            {s.allowNotApplicable ? (
+              <View style={styles.line}>
+                <Text style={styles.meta}>Not applicable at this site</Text>
+                <Switch value={isNa} disabled={!pm.editable} onValueChange={(on) => void pm.setNotApplicable(s.code, on)} accessibilityLabel={`${s.name} not applicable`} />
+              </View>
+            ) : null}
+          </Card>
+        );
+      })}
+
+      {v.modules.battery ? (
+        <PrimaryButton title="Battery voltages" variant="outline" onPress={() => router.push(`/pm/${v.id}/battery`)} />
+      ) : null}
+
+      <Card style={{ gap: spacing.sm }}>
+        <Text style={styles.section}>Overall comments</Text>
+        <TextField label="Overall comments" value={v.overallComments} multiline disabled={!pm.editable} onCommit={(t) => void pm.saveOverallComments(t ?? '')} placeholder="Anything the supervisor should know" />
+      </Card>
+      {pm.editable ? <PrimaryButton title="Review & complete" onPress={() => router.push(`/pm/${v.id}/review`)} /> : null}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { padding: spacing.lg, gap: spacing.md },
-  site: { fontSize: 22, fontWeight: '800', color: colors.text },
-  row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
-  meta: { fontSize: 14, color: colors.textMuted, marginTop: 2 },
-  sectionHead: { flexDirection: 'row', alignItems: 'center', minHeight: 48 },
-  sectionName: { fontSize: 18, fontWeight: '700', color: colors.text },
-  count: { fontSize: 18, fontWeight: '800' },
-  naRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm },
-  submit: { backgroundColor: colors.red, minHeight: 56, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  submitText: { color: colors.white, fontSize: 18, fontWeight: '700' },
+  line: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  site: { flex: 1, fontSize: 20, fontWeight: '800', color: colors.text },
+  section: { fontSize: 18, fontWeight: '700', color: colors.text },
+  meta: { fontSize: 15, color: colors.textMuted },
+  badge: { fontSize: 20, fontWeight: '800', minWidth: 28, textAlign: 'center' },
 });

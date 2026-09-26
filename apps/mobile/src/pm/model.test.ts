@@ -1,77 +1,86 @@
 import { describe, expect, it } from 'vitest';
-import { EMPTY_RESPONSE, keyedValue, parseNumberInput, phaseCurrents, progressBarText, readingUpsert, responseUpsert, type Field, type Item } from './model';
+import type { ChecklistItem } from '@/lib/api/types';
+import { applyPatch, completionMessage, dueText, formatDistance, issuesBySection, limitsHint, needsComment, needsPhoto, numberProblem, parseNumberInput, readingBody, responseBody } from './model';
 
-describe('parseNumberInput', () => {
-  it('accepts decimals with dot or comma and clears on empty', () => {
-    expect(parseNumberInput('53.5')).toEqual({ value: 53.5 });
-    expect(parseNumberInput(' 53,5 ')).toEqual({ value: 53.5 });
-    expect(parseNumberInput('-2')).toEqual({ value: -2 });
-    expect(parseNumberInput('')).toEqual({ value: null });
-  });
-  it('rejects non-numbers', () => {
+const item = (over: Partial<ChecklistItem> = {}): ChecklistItem => ({
+  id: 'i1',
+  sectionId: 's1',
+  code: 'x',
+  prompt: 'Is Automation Working?',
+  helpText: null,
+  responseType: 'YES_NO_NA',
+  options: [],
+  allowNotApplicable: true,
+  isRequired: true,
+  unit: null,
+  minValue: null,
+  maxValue: null,
+  isInteger: false,
+  failureOnAnswer: 'NO',
+  requiresPhotoOnFailure: true,
+  requiresCommentOnFailure: true,
+  photoOnAnswers: [],
+  commentOnAnswers: [],
+  photoInstructions: null,
+  ...over,
+});
+
+describe('PM model', () => {
+  it('parses numbers typed on a phone keypad; limits only when configured', () => {
+    expect(parseNumberInput('12,7')).toEqual({ value: 12.7 });
+    expect(parseNumberInput(' ')).toEqual({ value: null });
     expect(parseNumberInput('12a').error).toBe('Enter a number');
-    expect(parseNumberInput('1.2.3').error).toBe('Enter a number');
+    expect(numberProblem(120, { minValue: 0, maxValue: 100, isInteger: false })).toBe('Must be at most 100');
+    expect(numberProblem(2.5, { minValue: null, maxValue: null, isInteger: true })).toBe('Must be a whole number');
+    expect(numberProblem(99999, { minValue: null, maxValue: null, isInteger: false })).toBeNull();
+    expect(limitsHint({ minValue: 0, maxValue: 100, unit: '%' })).toBe('0 – 100 %');
+    expect(limitsHint({ minValue: null, maxValue: null, unit: 'V' })).toBeNull();
   });
-});
 
-describe('progressBarText', () => {
-  it('renders the requested style', () => {
-    expect(progressBarText(80)).toBe('████████░░ 80%');
-    expect(progressBarText(0)).toBe('░░░░░░░░░░ 0%');
-    expect(progressBarText(100)).toBe('██████████ 100%');
-    expect(progressBarText(150)).toBe('██████████ 150%');
+  it('failure answers need the configured evidence', () => {
+    const i = item();
+    const no = applyPatch(undefined, 'i1', { answer: 'NO' }, i);
+    expect(no.isFailure).toBe(true);
+    expect([needsComment(i, no), needsPhoto(i, no)]).toEqual([true, true]);
+    const yes = applyPatch(no, 'i1', { answer: 'YES' }, i);
+    expect([yes.isFailure, needsComment(i, yes), needsPhoto(i, yes)]).toEqual([false, false, false]);
+    const ext = item({ failureOnAnswer: 'NO', requiresPhotoOnFailure: false, photoOnAnswers: ['YES'] });
+    expect(needsPhoto(ext, applyPatch(undefined, 'i1', { answer: 'YES' }, ext))).toBe(true);
+    expect(needsPhoto(item({ responseType: 'PHOTO', failureOnAnswer: null }), undefined)).toBe(true);
   });
-});
 
-describe('upsert rows', () => {
-  it('sends only client-owned fields; the server fills snapshots and failure flags', () => {
-    const row = responseUpsert('v1', { ...EMPTY_RESPONSE('i1'), answer: 'YES', comment: 'ok' }, '2026-09-23T10:00:00Z');
-    expect(row).toEqual({
-      visit_id: 'v1',
-      checklist_item_id: 'i1',
+  it('sends the whole answer with the time it was made', () => {
+    const r = applyPatch(undefined, 'i1', { answer: 'YES', comment: 'ok' }, item());
+    expect(responseBody(r, '2026-09-15T10:00:00.000Z')).toEqual({
+      checklistItemId: 'i1',
       answer: 'YES',
-      numeric_value: null,
-      text_value: null,
-      selected_options: null,
-      date_value: null,
-      datetime_value: null,
+      numericValue: null,
+      textValue: null,
+      selectedOptions: null,
+      dateValue: null,
+      datetimeValue: null,
       comment: 'ok',
-      prompt_snapshot: '',
-      client_updated_at: '2026-09-23T10:00:00Z',
+      clientUpdatedAt: '2026-09-15T10:00:00.000Z',
     });
-    expect(row).not.toHaveProperty('is_failure');
-    expect(readingUpsert('v1', { reading_field_id: 'f1', numeric_value: 12, text_value: null }, 't')).toEqual({
-      visit_id: 'v1',
-      reading_field_id: 'f1',
-      numeric_value: 12,
-      text_value: null,
-      label_snapshot: '',
-      client_updated_at: 't',
-    });
+    const field = { id: 'f', sectionId: 's', code: 'c', label: 'Oil', valueType: 'TEXT' as const, unit: null, isInteger: false, minValue: null, maxValue: null, options: [], isRequired: true, helpText: null };
+    expect(readingBody(field, ' Okay ', 't')).toEqual({ readingFieldId: 'f', textValue: 'Okay', clientUpdatedAt: 't' });
+    expect(readingBody({ ...field, valueType: 'NUMBER' }, 12.7, 't')).toEqual({ readingFieldId: 'f', numericValue: 12.7, clientUpdatedAt: 't' });
   });
-});
 
-describe('keyed values', () => {
-  const field = (id: string, key: string) => ({ id, analytics_key: key }) as Field;
-  const item = (id: string, key: string, phase?: number) => ({ id, analytics_key: key, metadata: phase ? { phase_number: phase } : {} }) as Item;
-  it('finds values by analytics key in readings or items', () => {
-    const fields = [field('v', 'dc.rectifier_voltage_v')];
-    const items = [item('dmg', 'solar.damaged_panel_count')];
-    const readings = new Map([['v', { reading_field_id: 'v', numeric_value: 53.6, text_value: null }]]);
-    const responses = new Map([['dmg', { ...EMPTY_RESPONSE('dmg'), numeric_value: 2 }]]);
-    expect(keyedValue('dc.rectifier_voltage_v', fields, items, readings, responses)).toBe(53.6);
-    expect(keyedValue('solar.damaged_panel_count', fields, items, readings, responses)).toBe(2);
-    expect(keyedValue('dc.load_current_a', fields, items, readings, responses)).toBeNull();
-  });
-  it('collects entered phase currents in phase order', () => {
-    const items = [item('p3', 'dc.phase_current', 3), item('p1', 'dc.phase_current', 1), item('p2', 'dc.phase_current', 2)];
-    const responses = new Map([
-      ['p3', { ...EMPTY_RESPONSE('p3'), numeric_value: 9.1 }],
-      ['p1', { ...EMPTY_RESPONSE('p1'), numeric_value: 12.4 }],
+  it('wording', () => {
+    expect(completionMessage(0)).toBe('Ready to complete.');
+    expect(completionMessage(1)).toBe('Unable to complete: 1 item needs attention.');
+    expect(formatDistance(55.4)).toBe('55 m');
+    expect(formatDistance(1234)).toBe('1.2 km');
+    expect(dueText('2026-09-15', '2026-09-15')).toBe('Due today');
+    expect(dueText('2026-09-20', '2026-09-15')).toBe('Due in 5 days');
+    expect(dueText('2026-09-13', '2026-09-15')).toBe('Overdue by 2 days');
+    const groups = issuesBySection([
+      { sectionCode: 'A', kind: 'REQUIRED', refType: 'item', refId: '1', label: 'x' },
+      { sectionCode: '', kind: 'SIGNATURE_REQUIRED', refType: 'visit', refId: 'v', label: 'Technician signature' },
+      { sectionCode: 'A', kind: 'PHOTO_REQUIRED', refType: 'item', refId: '2', label: 'y' },
     ]);
-    expect(phaseCurrents(items, responses)).toEqual([
-      { phase: 1, amps: 12.4 },
-      { phase: 3, amps: 9.1 },
-    ]);
+    expect([...groups.keys()]).toEqual(['A', '']);
+    expect(groups.get('A')).toHaveLength(2);
   });
 });

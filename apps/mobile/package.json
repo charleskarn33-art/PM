@@ -15,7 +15,6 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
     "@ipt/shared": "workspace:*",
-    "@supabase/supabase-js": "^2.117.0",
     "expo": "~57.0.24",
     "expo-camera": "~57.0.5",
     "expo-constants": "~57.0.19",
