@@ -3,7 +3,8 @@ import { OrganisationModule } from '../organisation/organisation.module.js';
 import { MulterModule } from '@nestjs/platform-express';
 import { AppConfig } from '../config/app-config.js';
 import { OverdueJob } from './overdue.job.js';
-import { SchedulesController, SitePowerController, TemplatesController, VisitsController } from './pm.controllers.js';
+import { FieldService } from './field.service.js';
+import { FieldController, SchedulesController, SitePowerController, TemplatesController, VisitsController } from './pm.controllers.js';
 import { PowerHistoryService } from './power-history.service.js';
 import { SchedulesService } from './schedules.service.js';
 import { TemplatesService } from './templates.service.js';
@@ -19,8 +20,8 @@ import { VisitsService } from './visits.service.js';
       useFactory: (config: AppConfig) => ({ limits: { fileSize: config.photoMaxBytes, files: 1, fields: 10, fieldSize: 2_000 } }),
     }),
   ],
-  controllers: [TemplatesController, SchedulesController, VisitsController, SitePowerController],
-  providers: [TemplatesService, SchedulesService, VisitsService, PowerHistoryService, OverdueJob],
+  controllers: [TemplatesController, SchedulesController, VisitsController, SitePowerController, FieldController],
+  providers: [TemplatesService, SchedulesService, VisitsService, PowerHistoryService, OverdueJob, FieldService],
   exports: [TemplatesService, SchedulesService, VisitsService],
 })
 export class PmModule {}

@@ -5,6 +5,7 @@ import { ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { LoadingView } from '@/components/ui';
 import { mobileEnv } from '@/lib/env';
+import { OfflineProvider } from '@/offline/offline-provider';
 import { AuthProvider, useAuth } from '@/providers/auth-provider';
 import { colors, spacing } from '@/theme';
 
@@ -70,8 +71,10 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <StatusBar style="dark" />
-        <RootNavigator />
+        <OfflineProvider>
+          <StatusBar style="dark" />
+          <RootNavigator />
+        </OfflineProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

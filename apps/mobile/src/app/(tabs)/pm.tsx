@@ -2,9 +2,13 @@ import { PM_STATUS_TONE, toIsoDate } from '@ipt/shared';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { SavedCopyNote, SyncBar, SyncPill } from '@/components/sync-bar';
 import { Banner, Card, EmptyState, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
 import type { Schedule } from '@/lib/api/types';
 import { useApi } from '@/lib/api/use-api';
+import { useOffline } from '@/offline/offline-provider';
+import { useLocalVisits } from '@/offline/use-local-visits';
+import { isEditable } from '@/offline/visit-ops';
 import { dueText } from '@/pm/model';
 import { colors, radius, spacing, toneColors } from '@/theme';
 
@@ -18,9 +22,16 @@ export default function PmScheduleScreen() {
   const router = useRouter();
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['key']>('open');
   const schedules = useApi<Schedule[]>('/pm-schedules?mine=true&pageSize=100');
+  const { pack } = useOffline();
+  const local = useLocalVisits();
   const today = toIsoDate(new Date());
   const open = ['SCHEDULED', 'OVERDUE', 'IN_PROGRESS', 'REJECTED'];
-  const rows = (schedules.data ?? []).filter((s) => (filter === 'open' ? open.includes(s.status) : !open.includes(s.status)));
+  // Never loaded on this phone and offline: the open PMs from the field pack.
+  const list = schedules.data ?? (schedules.error ? (pack?.schedules ?? null) : null);
+  const onPhone = (s: Schedule) => local.find((v) => v.visit.scheduleId === s.id && (isEditable(v.visit) || v.syncStatus !== 'SYNCED'));
+  // A PM started or completed on the phone shows its state on the phone.
+  const status = (s: Schedule) => onPhone(s)?.visit.status ?? s.status;
+  const rows = (list ?? []).filter((s) => (filter === 'open' ? open.includes(status(s)) : !open.includes(status(s))));
 
   return (
     <View style={{ flex: 1 }}>
@@ -31,7 +42,12 @@ export default function PmScheduleScreen() {
           </Pressable>
         ))}
       </View>
-      {schedules.error ? <Banner tone="danger" message={schedules.error} /> : null}
+      <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.md, gap: spacing.sm }}>
+        <SyncBar />
+        <SavedCopyNote savedAt={schedules.savedAt} />
+        {!schedules.data && list ? <Text style={styles.meta}>Offline: showing the open PMs saved on this phone.</Text> : null}
+      </View>
+      {schedules.error && !list ? <Banner tone="danger" message={schedules.error} /> : null}
       {schedules.loading ? (
         <LoadingView />
       ) : (
@@ -41,27 +57,34 @@ export default function PmScheduleScreen() {
           contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}
           refreshControl={<RefreshControl refreshing={schedules.refreshing} onRefresh={() => void schedules.reload()} />}
           ListEmptyComponent={<EmptyState title="Nothing here" message={filter === 'open' ? 'No PM is scheduled for you.' : 'No completed PMs yet.'} />}
-          renderItem={({ item: s }) => (
+          renderItem={({ item: s }) => {
+            const visit = onPhone(s);
+            const st = status(s);
+            return (
             <Card style={{ gap: spacing.sm }}>
               <View style={styles.row}>
                 <Text style={styles.site}>
                   {s.site.siteCode} · {s.site.siteName}
                 </Text>
-                <StatusPill status={s.status} tone={PM_STATUS_TONE[s.status]} />
+                <StatusPill status={st} tone={PM_STATUS_TONE[st]} />
               </View>
-              <Text style={[styles.meta, s.status === 'OVERDUE' && { color: toneColors.danger.fg, fontWeight: '700' }]}>
-                {open.includes(s.status) ? dueText(s.dueDate, today) : `Due ${s.dueDate}`} · {s.priority.toLowerCase()} priority
+              {visit && visit.syncStatus !== 'SYNCED' ? <SyncPill status={visit.syncStatus} /> : null}
+              <Text style={[styles.meta, st === 'OVERDUE' && { color: toneColors.danger.fg, fontWeight: '700' }]}>
+                {open.includes(st) ? dueText(s.dueDate, today) : `Due ${s.dueDate}`} · {s.priority.toLowerCase()} priority
               </Text>
               <Text style={styles.meta}>
                 {s.template.name} (v{s.template.version})
               </Text>
-              {s.status === 'SCHEDULED' || s.status === 'OVERDUE' ? (
+              {visit ? (
+                <PrimaryButton title={isEditable(visit.visit) ? 'Continue PM' : 'Open PM'} variant="outline" onPress={() => router.push(`/pm/${visit.visit.id}`)} />
+              ) : s.status === 'SCHEDULED' || s.status === 'OVERDUE' ? (
                 <PrimaryButton title="Start PM" onPress={() => router.push({ pathname: '/pm/start', params: { scheduleId: s.id, siteId: s.siteId, siteName: `${s.site.siteCode} · ${s.site.siteName}` } })} />
               ) : s.status === 'IN_PROGRESS' || s.status === 'REJECTED' ? (
                 <PrimaryButton title="Continue PM" variant="outline" onPress={() => router.push({ pathname: '/pm/start', params: { scheduleId: s.id, siteId: s.siteId, resume: '1' } })} />
               ) : null}
             </Card>
-          )}
+            );
+          }}
         />
       )}
     </View>

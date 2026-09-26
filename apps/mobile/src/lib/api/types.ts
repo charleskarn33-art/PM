@@ -72,6 +72,8 @@ export interface ChecklistItem {
   photoOnAnswers: Answer[];
   commentOnAnswers: Answer[];
   photoInstructions: string | null;
+  analyticsKey: string | null;
+  isActive: boolean;
 }
 
 export interface ReadingField {
@@ -87,6 +89,8 @@ export interface ReadingField {
   options: string[];
   isRequired: boolean;
   helpText: string | null;
+  analyticsKey: string | null;
+  isActive: boolean;
 }
 
 export interface Section {
@@ -95,6 +99,9 @@ export interface Section {
   name: string;
   category: string;
   allowNotApplicable: boolean;
+  sortOrder: number;
+  isActive: boolean;
+  requiresEquipment: 'GENERATOR' | 'SOLAR' | 'GRID' | null;
   items: ChecklistItem[];
   readingFields: ReadingField[];
 }
@@ -123,6 +130,8 @@ export interface Photo {
   caption: string | null;
   contentType: string;
   createdAt: string;
+  /** Taken on this phone and not uploaded yet: the file on the phone. */
+  localUri?: string;
 }
 
 export type IssueKind = 'REQUIRED' | 'COMMENT_REQUIRED' | 'PHOTO_REQUIRED' | 'INCONSISTENT' | 'SIGNATURE_REQUIRED';
@@ -155,6 +164,9 @@ export interface VisitDetail {
   overallComments: string | null;
   reviewComments: string | null;
   technicianId: string;
+  siteId: string;
+  templateId: string;
+  scheduleId: string | null;
   gpsStatus: string | null;
   gpsDistanceM: number | null;
   gpsRadiusM: number | null;
@@ -171,6 +183,46 @@ export interface VisitDetail {
     battery: { units: { unitNumber: number; voltageV: number; comment: string | null }[] } | null;
     dc: { dcPowerKw: number | null; totalPhaseCurrentA: number | null } | null;
   };
+  /** What the phone needs to judge the visit offline with the server's rules. */
+  engine: VisitEngineInfo;
+}
+
+export interface ConsistencyRule {
+  id: string;
+  lhsKey: string;
+  operator: string;
+  rhsKey: string;
+  message: string;
+  isActive: boolean;
+}
+
+export interface VisitEngineInfo {
+  rules: ConsistencyRule[];
+  /** Sites with a configured battery count record each battery in this section. */
+  batteryUnits: { count: number; sectionCode: string } | null;
+  requireSignature: boolean;
+}
+
+export interface Template {
+  id: string;
+  code: string;
+  name: string;
+  version: number;
+  status: string;
+  sections: Section[];
+}
+
+/** GET /field/pack: what the phone keeps for working offline. */
+export interface FieldPack {
+  generatedAt: string;
+  userId: string;
+  settings: Settings;
+  sites: Site[];
+  schedules: Schedule[];
+  templates: Template[];
+  rules: ConsistencyRule[];
+  visits: VisitDetail[];
+  moreVisitIds: string[];
 }
 
 export interface Settings {

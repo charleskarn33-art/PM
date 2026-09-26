@@ -132,7 +132,6 @@ OVERDUE at start-up and hourly.
 | POST | `/visits/:id/photos` | `pm_visits.perform`, own visit — multipart: `file` (JPEG / PNG / WebP by content, at most `PHOTO_MAX_BYTES`), `id?`, `checklistItemId?`, `caption?`, `takenAt?` |
 | GET | `/visits/:id/photos/:photoId` | `pm_visits.read` (scoped) — the image |
 | DELETE | `/visits/:id/photos/:photoId` | `pm_visits.perform`, own editable visit |
-
 | PUT | `/visits/:id/signature` | `pm_visits.perform`, own editable visit — `{ name?, width, height, strokes: [[x, y], …][] }`; the server draws the signature (SVG); any later change to the visit clears it |
 | GET | `/visits/:id/signature` | `pm_visits.read` (scoped) — the image (`image/svg+xml`) |
 | PUT | `/visits/:id/battery-units` | `pm_visits.perform`, own visit — `{ units: [{ unitNumber, voltageV \| null, comment?, clientUpdatedAt? }] }`; only at sites with `batteryUnitCount`; every battery is then required before completion |
@@ -141,6 +140,11 @@ The visit detail includes `modules` — the power-module records built from its
 answers and readings (null for a section not applicable): `generator`, `dc`
 (with `phases`, calculated `dcPowerKw` and `totalPhaseCurrentA`), `battery`
 (with `units` and their min / max), `solar`, `nonTechnical`, `earthing`.
+
+It also includes `engine` — what the phone needs to judge the visit offline
+with the same rules: `{ rules, batteryUnits: { count, sectionCode } | null,
+requireSignature }`. `PUT /visits/:id/answers` returns `skipped` (edits older
+than the stored ones) and `PUT /visits/:id/battery-units` `skippedBatteryUnits`.
 
 Visit flow: IN_PROGRESS → COMPLETED → APPROVED, or REJECTED → (technician
 edits) IN_PROGRESS → COMPLETED. Completion % counts required answers and
@@ -155,6 +159,16 @@ without a position (422 `REASON_REQUIRED`); **BLOCK** refuses (422
 `OUTSIDE_GEOFENCE`). A site without coordinates is never blocked. The position
 is what the phone reports; it is stored with the result (`gpsStatus`,
 `gpsDistanceM`, `gpsRadiusM`, `geofenceMode`).
+
+## Field pack (offline data for the phone)
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/field/pack` | `pm_visits.perform` — `{ generatedAt, userId, settings, sites, schedules, templates, rules, visits, moreVisitIds }`: the sites the technician is assigned to, their open PM schedules, the active template versions with their structure, active consistency rules, settings, and the technician's open visits in full (first 50; the ids of any others) |
+
+The phone keeps this so PM work continues without a connection, and sends its
+changes later through the endpoints above (see the offline notes in
+`IMPLEMENTATION_PLAN.md`).
 
 ## Settings
 

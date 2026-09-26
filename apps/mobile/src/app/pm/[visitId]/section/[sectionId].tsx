@@ -21,7 +21,7 @@ export default function SectionScreen() {
   const photosFor = (itemId: string) => v.photos.filter((p) => p.checklistItemId === itemId);
   const issuesFor = (id: string) => v.issues.filter((i) => i.refId === id);
 
-  const saveState = pm.saveState === 'saving' ? 'Saving…' : pm.saveState === 'saved' ? 'Saved' : pm.saveState === 'error' ? 'Not saved' : '';
+  const saveState = pm.syncStatus === 'SYNCED' ? 'Synced' : pm.syncStatus === 'SYNCING' ? 'Syncing…' : pm.syncStatus === 'SYNC_ERROR' ? 'Sync error' : 'Saved on phone';
 
   return (
     <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">

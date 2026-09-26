@@ -5,23 +5,33 @@ import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { Banner, Card, LoadingView, PrimaryButton } from '@/components/ui';
 import { sessionClient } from '@/lib/api/session';
+import { ApiError } from '@/lib/api/session-client';
 import type { Settings, Site, VisitDetail } from '@/lib/api/types';
 import { errorMessage, useApi } from '@/lib/api/use-api';
 import { capturePosition, type CapturedPosition } from '@/lib/location';
+import { useOffline } from '@/offline/offline-provider';
+import { isEditable, startVisitLocally, type StartPayload } from '@/offline/visit-ops';
 import { formatDistance } from '@/pm/model';
+import { useAuth } from '@/providers/auth-provider';
 import { colors, radius, spacing, touchTarget } from '@/theme';
 
 /**
  * Start (or continue) a PM: takes a GPS fix, shows where the technician is
  * against the site's geofence as configured (WARN, REQUIRE_REASON, BLOCK),
  * asks for a reason when required, then starts the visit. The server applies
- * the same rules to the position sent.
+ * the same rules to the position sent. Without a connection the visit is
+ * started on the phone from the saved field pack and sent later.
  */
 export default function StartPmScreen() {
   const { scheduleId, siteId, siteName, resume } = useLocalSearchParams<{ scheduleId?: string; siteId: string; siteName?: string; resume?: string }>();
   const router = useRouter();
-  const settings = useApi<Settings>('/settings');
-  const site = useApi<Site>(`/sites/${siteId}`);
+  const { userId } = useAuth();
+  const { store, pack, requestSync } = useOffline();
+  const settingsQuery = useApi<Settings>('/settings');
+  const siteQuery = useApi<Site>(`/sites/${siteId}`);
+  // Without a connection, the copies in the field pack.
+  const settings = settingsQuery.data ?? pack?.settings ?? null;
+  const site = siteQuery.data ?? pack?.sites.find((s) => s.id === siteId) ?? null;
   const [fix, setFix] = useState<CapturedPosition | null>(null);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -30,51 +40,79 @@ export default function StartPmScreen() {
   const visitId = useRef(randomUUID());
 
   async function start(withGps: boolean) {
-    if (!sessionClient) return;
+    if (!sessionClient || !store || !userId) return;
     setBusy(true);
     setError(null);
+    const body: StartPayload = {
+      id: visitId.current,
+      ...(scheduleId ? { scheduleId } : { siteId }),
+      clientCreatedAt: new Date().toISOString(),
+      ...(withGps && fix?.position
+        ? { gps: { latitude: fix.position.latitude, longitude: fix.position.longitude, capturedAt: fix.position.capturedAt, ...(fix.position.accuracyM != null ? { accuracyM: fix.position.accuracyM } : {}) } }
+        : {}),
+      ...(reason.trim() ? { outsideRadiusReason: reason.trim() } : {}),
+    };
     try {
-      const body = {
-        ...(resume ? {} : { id: visitId.current }),
-        ...(scheduleId ? { scheduleId } : { siteId }),
-        clientCreatedAt: new Date().toISOString(),
-        ...(withGps && fix?.position
-          ? { gps: { latitude: fix.position.latitude, longitude: fix.position.longitude, capturedAt: fix.position.capturedAt, ...(fix.position.accuracyM != null ? { accuracyM: fix.position.accuracyM } : {}) } }
-          : {}),
-        ...(reason.trim() ? { outsideRadiusReason: reason.trim() } : {}),
-      };
       const { data } = await sessionClient.request<VisitDetail>('/visits', { method: 'POST', body });
+      await store.saveBase(data, true);
       router.replace(`/pm/${data.id}`);
     } catch (e) {
-      setError(errorMessage(e, 'start the PM'));
-      setBusy(false);
+      if (!(e instanceof ApiError && e.offline)) {
+        setError(errorMessage(e, 'start the PM'));
+        setBusy(false);
+        return;
+      }
+      // No connection: start on the phone; the start is sent (and checked again) later.
+      const local = pack ? startVisitLocally(pack, { ...body, technicianId: userId }) : { ok: false as const, message: 'No connection, and the PM data is not saved on this phone yet. Connect once to download it.' };
+      if (!local.ok) {
+        setError(local.message);
+        setBusy(false);
+        return;
+      }
+      await store.saveBase(local.visit, false);
+      await store.enqueue(local.visit.id, { kind: 'start', payload: body });
+      requestSync();
+      router.replace(`/pm/${local.visit.id}`);
+    }
+  }
+
+  /** Continuing an open PM: the copy on the phone, else the server's. */
+  async function resumeVisit() {
+    const saved = store ? (await store.visits()).find((v) => v.visit.scheduleId === scheduleId && isEditable(v.visit)) : undefined;
+    if (saved) return router.replace(`/pm/${saved.visit.id}`);
+    try {
+      const { data } = await sessionClient!.request<VisitDetail>('/visits', { method: 'POST', body: scheduleId ? { scheduleId } : { siteId } });
+      await store?.saveBase(data, true);
+      router.replace(`/pm/${data.id}`);
+    } catch (e) {
+      setError(errorMessage(e, 'open the PM'));
     }
   }
 
   // Continuing an open PM needs no new position.
   const resumed = useRef(false);
   useEffect(() => {
-    if (resume && !resumed.current) {
+    if (resume && store && !resumed.current) {
       resumed.current = true;
-      void start(false);
+      void resumeVisit();
     } else if (!resume) {
       void capturePosition().then(setFix);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resume]);
+  }, [resume, store]);
 
-  if (resume) return <LoadingView label="Opening PM…" />;
-  if (settings.loading || site.loading || !fix) return <LoadingView label="Getting your location…" />;
-  if (!settings.data || !site.data) return <Banner tone="danger" message={settings.error ?? site.error ?? 'Unable to load.'} />;
+  if (resume) return error ? <Banner tone="danger" message={error} /> : <LoadingView label="Opening PM…" />;
+  if ((!settings && settingsQuery.loading) || (!site && siteQuery.loading) || !fix) return <LoadingView label="Getting your location…" />;
+  if (!settings || !site) return <Banner tone="danger" message={settingsQuery.error ?? siteQuery.error ?? 'Unable to load.'} />;
 
   const geo = evaluateGeofence({
     site: {
-      latitude: site.data.latitude == null ? null : Number(site.data.latitude),
-      longitude: site.data.longitude == null ? null : Number(site.data.longitude),
-      geofenceRadiusM: site.data.geofenceRadiusM,
+      latitude: site.latitude == null ? null : Number(site.latitude),
+      longitude: site.longitude == null ? null : Number(site.longitude),
+      geofenceRadiusM: site.geofenceRadiusM,
     },
-    defaultRadiusM: settings.data.geofence.radiusM,
-    mode: settings.data.geofence.mode,
+    defaultRadiusM: settings.geofence.radiusM,
+    mode: settings.geofence.mode,
     position: fix.position,
   });
   const where =
@@ -89,7 +127,7 @@ export default function StartPmScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: 'Start PM' }} />
-      <Text style={styles.site}>{siteName ?? `${site.data.siteCode} · ${site.data.siteName}`}</Text>
+      <Text style={styles.site}>{siteName ?? `${site.siteCode} · ${site.siteName}`}</Text>
       <Banner tone={where.tone} message={where.text} />
       {fix.position?.accuracyM != null ? <Text style={styles.meta}>GPS accuracy ±{Math.round(fix.position.accuracyM)} m</Text> : null}
       {geo.blocked ? <Banner tone="danger" message="PM can only be started at the site. Move closer and check your location again." /> : null}

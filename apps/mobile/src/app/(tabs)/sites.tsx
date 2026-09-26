@@ -1,9 +1,11 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SavedCopyNote } from '@/components/sync-bar';
 import { Banner, Card, EmptyState, LoadingView } from '@/components/ui';
 import type { Site } from '@/lib/api/types';
 import { useApi } from '@/lib/api/use-api';
+import { useOffline } from '@/offline/offline-provider';
 import { colors, radius, spacing, touchTarget } from '@/theme';
 
 /** The sites the technician is assigned to (the server applies the scope). */
@@ -12,6 +14,11 @@ export default function SitesScreen() {
   const [q, setQ] = useState('');
   const [search, setSearch] = useState('');
   const sites = useApi<Site[]>(`/sites?pageSize=100${search ? `&q=${encodeURIComponent(search)}` : ''}`);
+  const { pack } = useOffline();
+  // Offline without a saved copy of this search: the sites in the field pack.
+  const needle = search.toLowerCase();
+  const fromPack = sites.error ? (pack?.sites.filter((s) => !needle || s.siteCode.toLowerCase().includes(needle) || s.siteName.toLowerCase().includes(needle)) ?? null) : null;
+  const list = sites.data ?? fromPack;
 
   return (
     <View style={{ flex: 1 }}>
@@ -25,12 +32,16 @@ export default function SitesScreen() {
         returnKeyType="search"
         accessibilityLabel="Search sites"
       />
-      {sites.error ? <Banner tone="danger" message={sites.error} /> : null}
+      <View style={{ paddingHorizontal: spacing.lg, paddingTop: spacing.sm }}>
+        <SavedCopyNote savedAt={sites.savedAt} />
+        {fromPack && !sites.data ? <Text style={styles.meta}>Offline: showing the sites saved on this phone.</Text> : null}
+      </View>
+      {sites.error && !list ? <Banner tone="danger" message={sites.error} /> : null}
       {sites.loading ? (
         <LoadingView />
       ) : (
         <FlatList
-          data={sites.data ?? []}
+          data={list ?? []}
           keyExtractor={(s) => s.id}
           contentContainerStyle={{ padding: spacing.lg, gap: spacing.md }}
           refreshControl={<RefreshControl refreshing={sites.refreshing} onRefresh={() => void sites.reload()} />}

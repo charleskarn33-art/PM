@@ -8,6 +8,8 @@ const item = (over: Partial<ChecklistItem> = {}): ChecklistItem => ({
   code: 'x',
   prompt: 'Is Automation Working?',
   helpText: null,
+  analyticsKey: null,
+  isActive: true,
   responseType: 'YES_NO_NA',
   options: [],
   allowNotApplicable: true,
@@ -62,7 +64,7 @@ describe('PM model', () => {
       comment: 'ok',
       clientUpdatedAt: '2026-09-15T10:00:00.000Z',
     });
-    const field = { id: 'f', sectionId: 's', code: 'c', label: 'Oil', valueType: 'TEXT' as const, unit: null, isInteger: false, minValue: null, maxValue: null, options: [], isRequired: true, helpText: null };
+    const field = { id: 'f', sectionId: 's', code: 'c', label: 'Oil', valueType: 'TEXT' as const, unit: null, isInteger: false, minValue: null, maxValue: null, options: [], isRequired: true, helpText: null, analyticsKey: null, isActive: true };
     expect(readingBody(field, ' Okay ', 't')).toEqual({ readingFieldId: 'f', textValue: 'Okay', clientUpdatedAt: 't' });
     expect(readingBody({ ...field, valueType: 'NUMBER' }, 12.7, 't')).toEqual({ readingFieldId: 'f', numericValue: 12.7, clientUpdatedAt: 't' });
   });

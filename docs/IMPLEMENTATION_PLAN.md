@@ -12,7 +12,7 @@ in [`legacy/`](legacy/README.md) and removed as each area is rebuilt.
 |---|---|
 | Repository | pnpm 10.33 monorepo, Node 22.22.2, TypeScript 5.9.3 |
 | `apps/web` | Next.js 16.3.6, Tailwind v4, shadcn-style UI — every page reads data through Supabase |
-| `apps/mobile` | Expo SDK 57 / React Native 0.86.3, Expo Router, SecureStore, SQLite offline store and sync engine — talks to Supabase |
+| `apps/mobile` | Expo SDK 57 / React Native 0.86.3, Expo Router, SecureStore, SQLite offline store and sync engine on the API |
 | `packages/shared` | Domain logic (DC kW, geofence, checklist rules, schedule recurrence, CSV) and zod validation — backend-neutral, reused |
 | `supabase/` | PostgreSQL migrations, RLS, triggers, tests — **replaced** |
 | MySQL | not installed; no `docker/`, no API application |
@@ -185,10 +185,54 @@ a written report, and **approval before the next phase**.
 - The Supabase-based mobile code (offline store, sync, push, notifications,
   corrective-action screens) is removed; Phase 7 rebuilds offline work on the
   API, Phase 8 corrective actions, Phase 12 notifications.
-- **The app currently needs a connection** to load and save (offline is Phase
-  7). It has not been run on a device in this environment: it typechecks,
+- Phase 6 needed a connection to load and save; Phase 7 below makes the
+  field work offline. It has not been run on a device in this environment: it typechecks,
   lints, passes its unit tests and bundles for Android, and the request
   shapes it sends were run against the real API.
+
+**Phase 7 — Offline.**
+- API: `GET /field/pack` — the technician's sites, open PM schedules, active
+  checklist versions, consistency rules, settings and open visits in full, for
+  the phone to keep. The visit detail carries `engine` (rules, battery
+  requirement, signature setting) so the phone judges a visit by itself.
+- One PM engine, two identical copies: `apps/api/src/pm/engine.ts` and
+  `packages/shared/src/pm/engine.ts` (the phone's); an API test fails when
+  they differ.
+- Phone store (expo-sqlite, per signed-in user): saved copies of the lists
+  and the field pack, each visit's last server copy, and the outbox of
+  changes not yet accepted (start, answers and readings, battery voltages,
+  photos, photo removal, signature, completion). What is shown is the server
+  copy with the queued changes applied, judged on the phone (completion %,
+  failures, what blocks completion).
+- Sync statuses: visit `LOCAL` (only on the phone), `PENDING_SYNC`,
+  `SYNCING`, `SYNCED`, `SYNC_ERROR`; each change `PENDING_SYNC`, `SYNCING` or
+  `SYNC_ERROR` (removed once accepted).
+- Sync engine: one visit's changes strictly in order; bursts of edits joined
+  into one request; no connection or a server problem (5xx, 408, 429) →
+  retried with exponential back-off (5 s doubling to 15 min, ±20 % jitter);
+  any other refusal → `SYNC_ERROR`, shown on the visit with **Try again** or
+  **Discard** (discarding a refused start removes that visit from the phone).
+  Runs on start, when the connection returns, when the app comes to the
+  front, after edits, and when a postponed change is due.
+- Conflicts: every change is safe to send twice (client ids for visits and
+  photos, `clientUpdatedAt` per answer, reading and battery). When the server
+  keeps a newer value from another device it says so and the phone shows a
+  notice. A completion whose answer was lost is recognised as done.
+- Offline start: the phone applies the same checks as the server with the
+  pack's data (assignment, active site, geofence mode and radius, reason,
+  equipment sections not applicable); the server checks again when the start
+  arrives.
+- Offline photos: kept in the app's folder until uploaded, then removed; a
+  photo removed before it was sent is simply dropped.
+- Screens: sync bar (Home, PM Schedule, Profile), sync state per visit and
+  per PM, "saved on phone" in the section header, saved copies shown with
+  their date when offline, a warning before signing out with unsent changes
+  (they stay on the phone for that account).
+- Verified: unit tests of the store and sync engine on SQLite (Node's
+  built-in), and a run of the phone's store and sync engine against the real
+  API over HTTP: a whole PM done with the connection cut, then sent — the
+  server's copy matched the phone's (COMPLETED, 100 %). Not yet run on a
+  device (see Remaining work in the phase report).
 
 ## 6. Open decisions (do not block Phase 1)
 

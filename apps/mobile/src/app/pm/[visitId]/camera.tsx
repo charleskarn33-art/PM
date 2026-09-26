@@ -5,7 +5,7 @@ import { CameraCapture } from '@/components/camera-capture';
 import { Banner } from '@/components/ui';
 import { useVisit } from '@/pm/visit-context';
 
-/** Evidence photo for one question: captured, compressed on the phone, uploaded to the visit. */
+/** Evidence photo for one question: captured, compressed and kept on the phone, uploaded when there is a connection. */
 export default function VisitCameraScreen() {
   const { itemId, caption } = useLocalSearchParams<{ itemId?: string; caption?: string }>();
   const pm = useVisit();
@@ -19,7 +19,7 @@ export default function VisitCameraScreen() {
         onCaptured={async (photo) => {
           const message = await pm.addPhoto({ id: photo.id, uri: photo.stored.uri, checklistItemId: itemId ?? null, caption, takenAt: photo.takenAt });
           if (message) {
-            setError(`${message} The photo was not added; take it again when connected.`);
+            setError(`${message} The photo was not added; take it again.`);
             throw new Error(message); // lets the camera screen take another
           }
           router.back();

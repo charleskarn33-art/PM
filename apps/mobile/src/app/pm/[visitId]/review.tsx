@@ -5,6 +5,7 @@ import { ProgressBar } from '@/components/answer-controls';
 import { SignaturePad, type Stroke } from '@/components/signature-pad';
 import { hasSignature } from '@/lib/signature';
 import { Banner, Card, LoadingView, PrimaryButton } from '@/components/ui';
+import { VisitSync } from '@/components/visit-sync';
 import { ISSUE_TEXT, completionMessage, issuesBySection } from '@/pm/model';
 import { useVisit } from '@/pm/visit-context';
 import { useAuth } from '@/providers/auth-provider';
@@ -47,6 +48,7 @@ export default function ReviewScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container} scrollEnabled={strokes.length === 0 || !needsSignature}>
       <Stack.Screen options={{ title: 'Review & complete' }} />
+      <VisitSync />
       <Card style={{ gap: spacing.sm }}>
         <ProgressBar pct={v.progress.completionPct} />
         <Text style={styles.meta}>Failures recorded: {v.progress.failureCount}</Text>

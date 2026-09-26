@@ -1,24 +1,28 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { File } from 'expo-file-system';
-import { sessionClient } from '@/lib/api/session';
 import type { ChecklistItem, ReadingField, ReadingRow, ResponsePatch, ResponseRow, VisitDetail } from '@/lib/api/types';
-import { errorMessage } from '@/lib/api/use-api';
+import { errorMessage } from '@/lib/api/errors';
 import { ApiError } from '@/lib/api/session-client';
-import { applyPatch, readingBody, responseBody } from './model';
-
-export type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+import { useOffline } from '@/offline/offline-provider';
+import { deletePhotoFile } from '@/offline/runtime';
+import type { StoredOp, VisitView } from '@/offline/store';
+import { applyOp, isEditable, judge, readingProblem, responseProblem, type OpInput, type ReadingChange, type SyncStatus } from '@/offline/visit-ops';
+import { applyPatch, completionMessage, readingBody, responseBody } from './model';
 
 export interface VisitModel {
   visit: VisitDetail | null;
   loading: boolean;
   error: string | null;
-  /** Answers as shown (with edits not yet confirmed by the server). */
   responses: Map<string, ResponseRow>;
   readings: Map<string, ReadingRow>;
   editable: boolean;
-  saveState: SaveState;
+  /** LOCAL (only on this phone), PENDING_SYNC, SYNCING, SYNCED or SYNC_ERROR. */
+  syncStatus: SyncStatus;
+  /** The change the server refused, when there is one. */
+  syncError: { message: string; kind: StoredOp['kind'] } | null;
+  /** Newer values from another device were kept by the server. */
+  notice: string | null;
   saveError: string | null;
-  /** Problems the server reported for one answer or reading, by its id. */
+  /** Problems with one answer or reading, by its id (checked on the phone, or refused by the server). */
   fieldErrors: Map<string, string>;
   setResponse: (item: ChecklistItem, patch: ResponsePatch) => void;
   setReading: (field: ReadingField, value: number | string | null) => void;
@@ -30,229 +34,187 @@ export interface VisitModel {
   sign: (sig: { width: number; height: number; strokes: [number, number][][]; name?: string }) => Promise<string | null>;
   complete: () => Promise<{ ok: true } | { ok: false; message: string }>;
   reload: () => Promise<void>;
+  retrySync: () => Promise<void>;
+  /** Drops the refused change (dropping a refused start drops the visit). */
+  discardRefused: () => Promise<{ visitRemoved: boolean }>;
+  dismissNotice: () => Promise<void>;
 }
 
 const Ctx = createContext<VisitModel | null>(null);
-const SAVE_DELAY_MS = 600;
+
+/** Server problems with an answers batch, mapped back to the question or reading ("responses.3" → its id). */
+function refusedFields(op: StoredOp | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  if (op?.kind !== 'answers' || !Array.isArray(op.lastErrorDetails)) return out;
+  for (const d of op.lastErrorDetails as { path?: string; message?: string }[]) {
+    const [kind, index] = (d.path ?? '').split('.');
+    const id = kind === 'responses' ? op.payload.responses[Number(index)]?.checklistItemId : kind === 'readings' ? op.payload.readings[Number(index)]?.readingFieldId : undefined;
+    if (id && d.message) out.set(id, d.message);
+  }
+  return out;
+}
 
 /**
- * One shared model per open visit. Edits show at once, are sent in batches
- * shortly after the last change (each with the time it was made), and the
- * server's answer — progress, failures, open issues — replaces the local view.
+ * One visit, from the phone's offline store. Every change is shown at once,
+ * saved on the phone and queued for the server; the sync engine sends it when
+ * there is a connection. Progress and what blocks completion are worked out on
+ * the phone with the server's engine rules.
  */
 export function VisitProvider({ visitId, children }: { visitId: string; children: ReactNode }) {
-  const [visit, setVisit] = useState<VisitDetail | null>(null);
+  const { store, engine, requestSync } = useOffline();
+  const [view, setView] = useState<VisitView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [pendingResponses, setPendingResponses] = useState<Map<string, ResponseRow>>(new Map());
-  const [pendingReadings, setPendingReadings] = useState<Map<string, ReadingRow>>(new Map());
-  const [saveState, setSaveState] = useState<SaveState>('idle');
+  const [localErrors, setLocalErrors] = useState<Map<string, string>>(new Map());
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Map<string, string>>(new Map());
-  const queue = useRef<{ responses: Map<string, object>; readings: Map<string, object> }>({ responses: new Map(), readings: new Map() });
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Edits being written: a copy read meanwhile could miss them, so it waits.
+  const writing = useRef(0);
+
+  const readStore = useCallback(async () => {
+    if (!store) return;
+    const v = await store.visit(visitId);
+    if (v) {
+      setView(v);
+      setError(null);
+    }
+    return v;
+  }, [store, visitId]);
 
   const load = useCallback(async () => {
-    if (!sessionClient) return;
+    if (!store || !engine) return;
     try {
-      setVisit((await sessionClient.request<VisitDetail>(`/visits/${visitId}`)).data);
-      setError(null);
+      const saved = await readStore();
+      if (!saved || saved.fromServer) {
+        // Fresh from the server when there is a connection; the queued changes stay on top.
+        await engine.refreshVisit(visitId).catch((e: unknown) => {
+          if (!saved) throw e;
+        });
+        await readStore();
+      }
     } catch (e) {
-      setError(errorMessage(e, 'open this PM'));
+      setError(e instanceof ApiError && e.offline ? 'This PM is not saved on this phone. Connect to open it.' : errorMessage(e, 'open this PM'));
     } finally {
       setLoading(false);
     }
-  }, [visitId]);
+  }, [store, engine, visitId, readStore]);
 
   useEffect(() => {
-    let active = true;
-    sessionClient
-      ?.request<VisitDetail>(`/visits/${visitId}`)
-      .then(
-        (r) => active && (setVisit(r.data), setError(null)),
-        (e: unknown) => active && setError(errorMessage(e, 'open this PM')),
-      )
-      .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
-  }, [visitId]);
+    void Promise.resolve().then(load);
+  }, [load]);
 
-  const flush = useCallback(async () => {
-    if (!sessionClient) return;
-    const batch = queue.current;
-    if (!batch.responses.size && !batch.readings.size) return;
-    queue.current = { responses: new Map(), readings: new Map() };
-    const responses = [...batch.responses.values()];
-    const readings = [...batch.readings.values()];
-    setSaveState('saving');
-    try {
-      const { data } = await sessionClient.request<VisitDetail>(`/visits/${visitId}/answers`, { method: 'PUT', body: { responses, readings } });
-      setVisit(data);
-      setSaveState('saved');
-      setSaveError(null);
-      setFieldErrors(new Map());
-      setPendingResponses((m) => new Map([...m].filter(([id]) => queue.current.responses.has(id))));
-      setPendingReadings((m) => new Map([...m].filter(([id]) => queue.current.readings.has(id))));
-    } catch (e) {
-      setSaveState('error');
-      if (e instanceof ApiError && e.code === 'VALIDATION_FAILED' && Array.isArray(e.details)) {
-        // Map "responses.3" / "readings.0" back to the item or field id that was refused.
-        const errors = new Map<string, string>();
-        for (const d of e.details as { path: string; message: string }[]) {
-          const [kind, index] = d.path.split('.');
-          const sent = kind === 'responses' ? responses[Number(index)] : kind === 'readings' ? readings[Number(index)] : undefined;
-          const id = sent && ('checklistItemId' in sent ? sent.checklistItemId : 'readingFieldId' in sent ? sent.readingFieldId : null);
-          if (typeof id === 'string') errors.set(id, d.message);
-        }
-        setFieldErrors(errors);
-        setSaveError('Some values were not accepted — see the highlighted answers. Nothing in this batch was saved.');
-        // Show the server's copy again for what was refused.
-        setPendingResponses(new Map());
-        setPendingReadings(new Map());
-        await load();
-      } else {
-        // Keep the edits and try again later (e.g. no connection).
-        for (const r of responses) queue.current.responses.set((r as { checklistItemId: string }).checklistItemId, r);
-        for (const r of readings) queue.current.readings.set((r as { readingFieldId: string }).readingFieldId, r);
-        setSaveError(errorMessage(e, 'save your answers'));
-      }
-    }
-  }, [visitId, load]);
+  useEffect(() => {
+    if (!store) return;
+    return store.onChange((id) => {
+      if ((id === visitId || id === null) && writing.current === 0) void readStore();
+    });
+  }, [store, visitId, readStore]);
 
-  const schedule = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void flush(), SAVE_DELAY_MS);
-  }, [flush]);
+  const visit = view?.visit ?? null;
+  const editable = Boolean(visit && isEditable(visit));
 
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-      void flush(); // leaving the visit: send what is left
-    },
-    [flush],
-  );
-
-  const responses = useMemo(() => {
-    const m = new Map((visit?.responses ?? []).map((r) => [r.checklistItemId, r]));
-    for (const [id, r] of pendingResponses) m.set(id, r);
-    return m;
-  }, [visit, pendingResponses]);
-
-  const readings = useMemo(() => {
-    const m = new Map((visit?.readings ?? []).map((r) => [r.readingFieldId, r]));
-    for (const [id, r] of pendingReadings) m.set(id, r);
-    return m;
-  }, [visit, pendingReadings]);
-
-  const editable = visit?.status === 'IN_PROGRESS' || visit?.status === 'REJECTED';
-
-  const setResponse = useCallback(
-    (item: ChecklistItem, patch: ResponsePatch) => {
-      const next = applyPatch(responses.get(item.id), item.id, patch, item);
-      setPendingResponses((m) => new Map(m).set(item.id, next));
-      queue.current.responses.set(item.id, responseBody(next, new Date().toISOString()));
-      schedule();
-    },
-    [responses, schedule],
-  );
-
-  const setReading = useCallback(
-    (field: ReadingField, value: number | string | null) => {
-      const row: ReadingRow = {
-        readingFieldId: field.id,
-        numericValue: typeof value === 'number' ? value : null,
-        textValue: typeof value === 'string' ? value : null,
-      };
-      setPendingReadings((m) => new Map(m).set(field.id, row));
-      queue.current.readings.set(field.id, readingBody(field, value, new Date().toISOString()));
-      schedule();
-    },
-    [schedule],
-  );
-
-  /** Runs an immediate request (after sending queued answers) and shows the returned visit. */
-  const act = useCallback(
-    async (path: string, init: { method: string; body?: unknown }, action: string): Promise<string | null> => {
-      if (!sessionClient) return 'The app is not configured.';
-      await flush();
+  /** Shows the change at once, saves it on the phone and queues it for the server. */
+  const change = useCallback(
+    async (op: OpInput): Promise<string | null> => {
+      if (!store) return 'The phone’s storage is not ready yet.';
+      setView((v) =>
+        v ? { ...v, visit: judge(applyOp(v.visit, { ...op, seq: 0, visitId, status: 'PENDING_SYNC', attempts: 0, nextAttemptAt: 0, lastError: null, createdAt: new Date().toISOString() })) } : v,
+      );
+      writing.current += 1;
       try {
-        setVisit((await sessionClient.request<VisitDetail>(path, init)).data);
+        const { unusedFiles } = await store.enqueue(visitId, op);
+        unusedFiles.forEach(deletePhotoFile);
+        setSaveError(null);
+        requestSync();
         return null;
-      } catch (e) {
-        return errorMessage(e, action);
+      } catch {
+        const message = 'The change could not be saved on this phone. Try again.';
+        setSaveError(message);
+        return message;
+      } finally {
+        writing.current -= 1;
+        if (writing.current === 0) await readStore();
       }
     },
-    [flush],
+    [store, visitId, requestSync, readStore],
   );
+
+  const setFieldError = (id: string, message: string | null) =>
+    setLocalErrors((m) => {
+      const next = new Map(m);
+      if (message) next.set(id, message);
+      else next.delete(id);
+      return next;
+    });
+
+  const responses = useMemo(() => new Map((visit?.responses ?? []).map((r) => [r.checklistItemId, r])), [visit]);
+  const readings = useMemo(() => new Map((visit?.readings ?? []).map((r) => [r.readingFieldId, r])), [visit]);
+  const refused = view?.ops.find((o) => o.status === 'SYNC_ERROR');
+  const fieldErrors = useMemo(() => new Map([...refusedFields(refused), ...localErrors]), [refused, localErrors]);
+  const now = () => new Date().toISOString();
 
   const value: VisitModel = {
     visit,
-    loading,
-    error,
+    loading: loading && !visit,
+    error: visit ? null : error,
     responses,
     readings,
     editable,
-    saveState,
+    syncStatus: view?.syncStatus ?? 'SYNCED',
+    syncError: refused ? { message: refused.lastError ?? 'The server refused this change.', kind: refused.kind } : null,
+    notice: view?.notice ?? null,
     saveError,
     fieldErrors,
-    setResponse,
-    setReading,
+    setResponse: (item, patch) => {
+      if (!visit) return;
+      const body = responseBody(applyPatch(responses.get(item.id), item.id, patch, item), now());
+      const problem = responseProblem(visit, body);
+      setFieldError(item.id, problem);
+      if (!problem) void change({ kind: 'answers', payload: { responses: [body], readings: [] } });
+    },
+    setReading: (field, v) => {
+      if (!visit) return;
+      const b = readingBody(field, v, now());
+      const body: ReadingChange = { readingFieldId: b.readingFieldId, numericValue: ('numericValue' in b ? b.numericValue : null) ?? null, textValue: ('textValue' in b ? b.textValue : null) ?? null, clientUpdatedAt: b.clientUpdatedAt };
+      const problem = readingProblem(visit, body);
+      setFieldError(field.id, problem);
+      if (!problem) void change({ kind: 'answers', payload: { responses: [], readings: [body] } });
+    },
     setNotApplicable: async (code, notApplicable) => {
       const current = new Set(visit?.notApplicableSections ?? []);
       if (notApplicable) current.add(code);
       else current.delete(code);
-      const message = await act(`/visits/${visitId}/answers`, { method: 'PUT', body: { notApplicableSections: [...current] } }, 'change the section');
-      if (message) setSaveError(message);
+      await change({ kind: 'answers', payload: { responses: [], readings: [], notApplicableSections: [...current] } });
     },
-    saveOverallComments: (text) => act(`/visits/${visitId}/answers`, { method: 'PUT', body: { overallComments: text } }, 'save the comments'),
-    addPhoto: async ({ id, uri, checklistItemId, caption, takenAt }) => {
-      if (!sessionClient) return 'The app is not configured.';
-      await flush();
-      const form = new FormData();
-      form.append('id', id);
-      if (checklistItemId) form.append('checklistItemId', checklistItemId);
-      if (caption) form.append('caption', caption.slice(0, 255));
-      form.append('takenAt', takenAt);
-      // React Native's FormData takes a file as { uri, name, type }.
-      form.append('file', { uri, name: `${id}.jpg`, type: 'image/jpeg' } as unknown as Blob);
-      try {
-        await sessionClient.upload(`/visits/${visitId}/photos`, form);
-        try {
-          new File(uri).delete(); // uploaded: the phone's copy is no longer needed
-        } catch {
-          // Leaving the file is harmless; it is in the app's own folder.
-        }
-        await load();
-        return null;
-      } catch (e) {
-        return errorMessage(e, 'upload the photo');
-      }
-    },
-    deletePhoto: async (photoId) => {
-      if (!sessionClient) return 'The app is not configured.';
-      try {
-        await sessionClient.request(`/visits/${visitId}/photos/${photoId}`, { method: 'DELETE' }); // 204: no visit returned
-        await load();
-        return null;
-      } catch (e) {
-        return errorMessage(e, 'remove the photo');
-      }
-    },
-    saveBatteryUnits: (units) => act(`/visits/${visitId}/battery-units`, { method: 'PUT', body: { units } }, 'save the battery readings'),
-    sign: (sig) => act(`/visits/${visitId}/signature`, { method: 'PUT', body: sig }, 'save the signature'),
+    saveOverallComments: (text) => change({ kind: 'answers', payload: { responses: [], readings: [], overallComments: text.trim() || null } }),
+    addPhoto: ({ id, uri, checklistItemId, caption, takenAt }) =>
+      change({ kind: 'photo', payload: { id, localUri: uri, checklistItemId, ...(caption ? { caption: caption.slice(0, 255) } : {}), takenAt } }),
+    deletePhoto: (photoId) => change({ kind: 'photo_delete', payload: { photoId } }),
+    saveBatteryUnits: (units) => change({ kind: 'battery', payload: { units: units.map((u) => ({ ...u, clientUpdatedAt: now() })) } }),
+    sign: (sig) => change({ kind: 'sign', payload: sig }),
     complete: async () => {
-      if (!sessionClient) return { ok: false, message: 'The app is not configured.' };
-      await flush();
-      try {
-        setVisit((await sessionClient.request<VisitDetail>(`/visits/${visitId}/complete`, { method: 'POST' })).data);
-        return { ok: true };
-      } catch (e) {
-        await load(); // shows the current list of issues
-        return { ok: false, message: errorMessage(e, 'complete the PM') };
-      }
+      if (!visit) return { ok: false, message: 'The PM is not loaded.' };
+      if (visit.issues.length) return { ok: false, message: completionMessage(visit.issues.length) };
+      const message = await change({ kind: 'complete', payload: {} });
+      return message ? { ok: false, message } : { ok: true };
     },
-    reload: load,
+    reload: async () => {
+      requestSync();
+      await load();
+    },
+    retrySync: async () => {
+      await store?.retry(visitId);
+      requestSync();
+    },
+    discardRefused: async () => {
+      if (!store || !refused) return { visitRemoved: false };
+      const r = await store.discard(refused.seq);
+      r.unusedFiles.forEach(deletePhotoFile);
+      if (!r.visitRemoved) await readStore();
+      return { visitRemoved: r.visitRemoved };
+    },
+    dismissNotice: async () => {
+      await store?.clearNotice(visitId);
+    },
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

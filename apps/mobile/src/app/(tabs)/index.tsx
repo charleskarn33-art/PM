@@ -1,13 +1,16 @@
 import { ROLE_LABELS } from '@ipt/shared';
 import { useRouter } from 'expo-router';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SyncBar, SyncPill } from '@/components/sync-bar';
 import { Banner, Card, LoadingView } from '@/components/ui';
 import type { Schedule, VisitSummary } from '@/lib/api/types';
 import { useApi } from '@/lib/api/use-api';
+import { useLocalVisits } from '@/offline/use-local-visits';
+import { isEditable, type SyncStatus } from '@/offline/visit-ops';
 import { useAuth } from '@/providers/auth-provider';
 import { colors, spacing, toneColors } from '@/theme';
 
-/** Home: what needs doing today, from the server. */
+/** Home: what needs doing today (from the server, or the copy saved on the phone when offline). */
 export default function HomeScreen() {
   const { profile } = useAuth();
   const router = useRouter();
@@ -16,18 +19,25 @@ export default function HomeScreen() {
   const overdue = useApi<Schedule[]>('/pm-schedules?mine=true&status=OVERDUE&pageSize=1');
   const inProgress = useApi<VisitSummary[]>('/visits?mine=true&status=IN_PROGRESS&pageSize=20');
   const returned = useApi<VisitSummary[]>('/visits?mine=true&status=REJECTED&pageSize=20');
+  const local = useLocalVisits();
   const all = [sites, open, overdue, inProgress, returned];
   const refreshing = all.some((q) => q.refreshing);
   const total = (q: { meta?: Record<string, unknown> }) => (typeof q.meta?.total === 'number' ? q.meta.total : 0);
 
   if (all.every((q) => q.loading)) return <LoadingView />;
   const error = all.find((q) => q.error)?.error;
-  const working = [...(returned.data ?? []), ...(inProgress.data ?? [])];
+  // Visits on the phone first (they include changes not sent yet), then any others the server lists.
+  const onPhone = local.filter((v) => isEditable(v.visit) || v.syncStatus !== 'SYNCED');
+  const working: { id: string; status: string; site: { siteCode: string; siteName: string }; completionPct: number; sync?: SyncStatus }[] = [
+    ...onPhone.map((v) => ({ ...v.visit, sync: v.syncStatus })),
+    ...[...(returned.data ?? []), ...(inProgress.data ?? [])].filter((v) => !onPhone.some((l) => l.visit.id === v.id)),
+  ];
 
   return (
     <ScrollView contentContainerStyle={styles.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void Promise.all(all.map((q) => q.reload()))} />}>
       <Text style={styles.hello}>Hello, {profile?.full_name || profile?.email}</Text>
       <Text style={styles.role}>{profile?.role ? ROLE_LABELS[profile.role] : ''}</Text>
+      <SyncBar />
       {error ? <Banner tone="danger" message={error} /> : null}
       <View style={styles.grid}>
         <Stat label="My sites" value={total(sites)} onPress={() => router.push('/sites')} />
@@ -43,8 +53,9 @@ export default function HomeScreen() {
               {v.site.siteCode} · {v.site.siteName}
             </Text>
             <Text style={[styles.meta, v.status === 'REJECTED' && { color: toneColors.danger.fg }]}>
-              {v.status === 'REJECTED' ? 'Returned for correction' : `In progress · ${Math.floor(v.completionPct)}% complete`}
+              {v.status === 'REJECTED' ? 'Returned for correction' : v.status === 'COMPLETED' ? 'Completed' : `In progress · ${Math.floor(v.completionPct)}% complete`}
             </Text>
+            {v.sync && v.sync !== 'SYNCED' ? <SyncPill status={v.sync} /> : null}
           </Card>
         </Pressable>
       ))}

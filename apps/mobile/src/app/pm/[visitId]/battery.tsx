@@ -12,8 +12,7 @@ export default function BatteryUnitsScreen() {
   const [error, setError] = useState<string | null>(null);
   if (pm.loading || !pm.visit) return <LoadingView />;
   const units = pm.visit.modules.battery?.units ?? [];
-  const required = pm.visit.issues.filter((i) => i.refType === 'battery_unit').map((i) => Number(i.refId));
-  const count = Math.max(units.length + required.length, ...units.map((u) => u.unitNumber), ...required);
+  const count = pm.visit.engine.batteryUnits?.count ?? 0;
   if (!count) return <Banner tone="info" message="This site has no battery count configured." />;
 
   return (

@@ -6,6 +6,7 @@ import { RequirePermissions } from '../authz/decorators.js';
 import { requireGlobal } from '../authz/require-global.js';
 import { IdPipe } from '../common/id.pipe.js';
 import { paged } from '../common/paged.js';
+import { FieldService } from './field.service.js';
 import { PowerHistoryService } from './power-history.service.js';
 import { SchedulesService } from './schedules.service.js';
 import { TemplatesService } from './templates.service.js';
@@ -288,5 +289,17 @@ export class SitePowerController {
   @Get(':id/power/:module')
   history(@Param('id', IdPipe) id: string, @Param('module') module: string, @Query() query: unknown, @CurrentUser() me: AuthUser) {
     return this.power.history(id, module, query, me);
+  }
+}
+
+/** The phone's offline data: see FieldService. */
+@Controller('field')
+export class FieldController {
+  constructor(private readonly field: FieldService) {}
+
+  @RequirePermissions('pm_visits.perform')
+  @Get('pack')
+  pack(@CurrentUser() me: AuthUser) {
+    return this.field.pack(me);
   }
 }

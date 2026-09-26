@@ -23,7 +23,7 @@ import {
   type ResponseValues,
 } from './engine.js';
 import { sniffImage } from './image-type.js';
-import { fieldView, itemView, moduleView, num, stringList, toEngineField, toEngineItem } from './mapping.js';
+import { fieldView, itemView, moduleView, num, stringList, toEngineField, toEngineItem, toEngineRule } from './mapping.js';
 import { batteryUnitRequirement, loadStructure, loadVisitState, refreshProgress } from './visit-state.js';
 import { AnswersInput, BatteryUnitsInput, PhotoFields, ReviewInput, SignatureInput, StartVisitInput, VisitListQuery } from './visits.schemas.js';
 
@@ -406,12 +406,15 @@ export class VisitsService {
     if (!visit) throw notFound('Visit');
     const { generator, dc, dcPhases, battery, batteryUnits, solar, nonTechnical, earthing, signatureKey: _key, ...rest } = visit;
     const visitRow = { ...rest, gpsLatitude: num(rest.gpsLatitude), gpsLongitude: num(rest.gpsLongitude), gpsAccuracyM: num(rest.gpsAccuracyM), gpsDistanceM: num(rest.gpsDistanceM) };
-    const [structure, responses, readings, photos, state] = await Promise.all([
+    const [structure, responses, readings, photos, state, rules, batteryRequirement, pmSettings] = await Promise.all([
       loadStructure(this.prisma, visit.templateId),
       this.prisma.pmResponse.findMany({ where: { visitId } }),
       this.prisma.pmReading.findMany({ where: { visitId } }),
       this.prisma.pmPhoto.findMany({ where: { visitId }, orderBy: { createdAt: 'asc' }, omit: { storageKey: true } }),
       loadVisitState(this.prisma, visit),
+      this.prisma.pmConsistencyRule.findMany({ where: { isActive: true }, orderBy: { id: 'asc' } }),
+      batteryUnitRequirement(this.prisma, visit),
+      this.settings.get('pm'),
     ]);
     const progress = visitProgress(state);
     return {
@@ -439,6 +442,8 @@ export class VisitsService {
       progress,
       issues: EDITABLE.includes(visit.status) ? [...visitIssues(state), ...(await this.signatureIssue(visit))] : [],
       signature: visit.signedAt ? { signedAt: visit.signedAt, signedName: visit.signedName } : null,
+      /** What the phone needs to judge the visit offline with the same engine rules. */
+      engine: { rules: rules.map(toEngineRule), batteryUnits: batteryRequirement, requireSignature: pmSettings.requireSignature },
     };
   }
 

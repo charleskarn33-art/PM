@@ -1,10 +1,12 @@
 import { PM_STATUS_TONE } from '@ipt/shared';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Linking, Platform, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { SavedCopyNote } from '@/components/sync-bar';
 import { Banner, Card, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
 import type { Schedule, Site, VisitSummary } from '@/lib/api/types';
 import { useApi } from '@/lib/api/use-api';
 import { mapsUrl, webMapsUrl } from '@/lib/maps';
+import { useOffline } from '@/offline/offline-provider';
 import { colors, spacing } from '@/theme';
 
 const yesNo = (v: boolean) => (v ? 'Yes' : 'No');
@@ -16,10 +18,14 @@ export default function SiteScreen() {
   const site = useApi<Site>(`/sites/${id}`);
   const schedules = useApi<Schedule[]>(`/pm-schedules?siteId=${id}&mine=true&pageSize=20`);
   const visits = useApi<VisitSummary[]>(`/visits?siteId=${id}&pageSize=10`);
+  const { pack } = useOffline();
+  // Offline without a saved copy: the site and its open PMs from the field pack.
+  const packSite = site.error ? pack?.sites.find((x) => x.id === id) : undefined;
+  const siteSchedules = schedules.data ?? (schedules.error ? pack?.schedules.filter((x) => x.siteId === id) : undefined);
 
   if (site.loading) return <LoadingView />;
-  if (!site.data) return <Banner tone="danger" message={site.error ?? 'Site not found.'} />;
-  const s = site.data;
+  const s = site.data ?? packSite;
+  if (!s) return <Banner tone="danger" message={site.error ?? 'Site not found.'} />;
   const lat = s.latitude == null ? null : Number(s.latitude);
   const lng = s.longitude == null ? null : Number(s.longitude);
   const label = `${s.siteCode} ${s.siteName}`;
@@ -37,6 +43,8 @@ export default function SiteScreen() {
       refreshControl={<RefreshControl refreshing={site.refreshing} onRefresh={() => void Promise.all([site.reload(), schedules.reload(), visits.reload()])} />}
     >
       <Stack.Screen options={{ title: s.siteCode }} />
+      <SavedCopyNote savedAt={site.savedAt} />
+      {packSite ? <Text style={styles.meta}>Offline: showing the site as saved on this phone.</Text> : null}
       <Card style={{ gap: spacing.xs }}>
         <Text style={styles.name}>{s.siteName}</Text>
         <Text style={styles.meta}>{[s.region?.name, s.cluster?.name, s.county?.name].filter(Boolean).join(' · ')}</Text>
@@ -53,7 +61,7 @@ export default function SiteScreen() {
       </Card>
 
       <Text style={styles.heading}>My PMs at this site</Text>
-      {(schedules.data ?? []).filter((x) => x.status !== 'CANCELLED').slice(0, 5).map((x) => (
+      {(siteSchedules ?? []).filter((x) => x.status !== 'CANCELLED').slice(0, 5).map((x) => (
         <Card key={x.id} style={styles.line}>
           <Text style={styles.meta}>Due {x.dueDate}</Text>
           <StatusPill status={x.status} tone={PM_STATUS_TONE[x.status]} />
@@ -62,7 +70,7 @@ export default function SiteScreen() {
       <PrimaryButton title="Start unscheduled PM" onPress={() => router.push({ pathname: '/pm/start', params: { siteId: s.id, siteName: `${s.siteCode} · ${s.siteName}` } })} />
 
       <Text style={styles.heading}>Recent visits</Text>
-      {visits.data?.length ? null : <Text style={styles.meta}>No visits yet.</Text>}
+      {visits.data?.length ? null : <Text style={styles.meta}>{visits.error ? visits.error : 'No visits yet.'}</Text>}
       {(visits.data ?? []).map((v) => (
         <Card key={v.id} style={styles.line}>
           <Text style={styles.meta}>

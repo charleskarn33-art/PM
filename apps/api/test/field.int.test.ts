@@ -138,3 +138,38 @@ describe('signature', () => {
     expect(v.issues.some((i: { kind: string }) => i.kind === 'SIGNATURE_REQUIRED')).toBe(false);
   });
 });
+
+describe('field pack (offline data for the phone)', () => {
+  it('holds the technician’s sites, open schedules, active templates, rules, settings and open visits in full', async () => {
+    const v = (await tech.post('/visits', { siteId: sites.located, gps: NEAR }).expect(201)).body.data;
+    const pack = (await tech.get('/field/pack').expect(200)).body.data;
+    expect(pack.userId).toBeTruthy();
+    expect(pack.settings).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true } });
+    expect(pack.sites.map((s: { siteCode: string }) => s.siteCode)).toEqual(['G-1', 'G-2']);
+    expect(pack.templates.length).toBeGreaterThan(0);
+    const template = pack.templates[0];
+    expect(template.status).toBe('ACTIVE');
+    expect(template.sections[0].items.length + template.sections[0].readingFields.length).toBeGreaterThan(0);
+    expect(pack.rules.every((r: { isActive: boolean }) => r.isActive)).toBe(true);
+    expect(pack.visits.map((x: { id: string }) => x.id)).toEqual([v.id]);
+    expect(pack.visits[0].engine).toMatchObject({ requireSignature: true, batteryUnits: null });
+    expect(pack.visits[0].engine.rules).toEqual(pack.rules);
+    expect(pack.moreVisitIds).toEqual([]);
+  });
+
+  it('is for technicians carrying out PM', async () => {
+    await supervisor.get('/field/pack').expect(403);
+  });
+
+  it('replays an offline session: same-id start, older edits skipped, newer kept', async () => {
+    const id = '0b6f3a52-6a8f-4b39-9a0e-3f4a3c1d2e10';
+    const start = { id, siteId: sites.located, gps: NEAR, clientCreatedAt: '2026-09-20T08:00:00.000Z' };
+    const v = (await tech.post('/visits', start).expect(201)).body.data;
+    expect((await tech.post('/visits', start).expect(201)).body.data.id).toBe(v.id); // the retry after a lost answer
+    const field = v.sections.flatMap((s: { readingFields: { id: string; valueType: string }[] }) => s.readingFields).find((f: { valueType: string }) => f.valueType === 'NUMBER');
+    await tech.put(`/visits/${id}/answers`, { readings: [{ readingFieldId: field.id, numericValue: 20, clientUpdatedAt: '2026-09-20T08:10:00.000Z' }] }).expect(200);
+    const older = (await tech.put(`/visits/${id}/answers`, { readings: [{ readingFieldId: field.id, numericValue: 5, clientUpdatedAt: '2026-09-20T08:05:00.000Z' }] }).expect(200)).body.data;
+    expect(older.skipped).toEqual([{ type: 'reading', id: field.id }]);
+    expect(older.readings.find((r: { readingFieldId: string }) => r.readingFieldId === field.id).numericValue).toBe(20);
+  });
+});

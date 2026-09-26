@@ -3,6 +3,7 @@ import { Stack, useRouter } from 'expo-router';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Banner, Card, LoadingView, PrimaryButton, StatusPill } from '@/components/ui';
 import { ProgressBar, TextField } from '@/components/answer-controls';
+import { VisitSync } from '@/components/visit-sync';
 import { useVisit } from '@/pm/visit-context';
 import { colors, spacing, toneColors } from '@/theme';
 
@@ -31,9 +32,10 @@ export default function VisitScreen() {
         <Text style={[styles.meta, v.progress.failureCount > 0 && { color: toneColors.danger.fg, fontWeight: '700' }]}>Failures recorded: {v.progress.failureCount}</Text>
         {v.gpsStatus === 'OUTSIDE_RADIUS' ? <Text style={styles.meta}>Started {Math.round(v.gpsDistanceM ?? 0)} m from the site.</Text> : null}
       </Card>
+      <VisitSync />
       {v.status === 'REJECTED' && v.reviewComments ? <Banner tone="danger" message={`Returned by your supervisor: ${v.reviewComments}`} /> : null}
       {pm.saveError ? <Banner tone="danger" message={pm.saveError} /> : null}
-      {!pm.editable ? <Banner tone="info" message="This PM is completed and can no longer be changed." /> : null}
+      {!pm.editable ? <Banner tone="info" message={v.status === 'COMPLETED' && pm.syncStatus !== 'SYNCED' ? 'Completed on this phone; it is sent to the server when there is a connection.' : 'This PM is completed and can no longer be changed.'} /> : null}
 
       {v.sections.map((s) => {
         const p = v.progress.sections.find((x) => x.code === s.code);
@@ -61,7 +63,7 @@ export default function VisitScreen() {
         );
       })}
 
-      {v.modules.battery ? (
+      {v.engine.batteryUnits && !na.has(v.engine.batteryUnits.sectionCode) ? (
         <PrimaryButton title="Battery voltages" variant="outline" onPress={() => router.push(`/pm/${v.id}/battery`)} />
       ) : null}
 
