@@ -1,0 +1,500 @@
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { createHash, randomUUID } from 'node:crypto';
+import type { AuthUser } from '../auth/auth-user.js';
+import { managesRegion, siteScope, within } from '../authz/scope.js';
+import { AppError } from '../common/http-exception.filter.js';
+import { invalid, notFound, rethrowDbError } from '../common/prisma-errors.js';
+import { parseInput } from '../common/validation.js';
+import { AppConfig } from '../config/app-config.js';
+import type { PmStatus, PmVisit, Prisma, SiteEquipment } from '../generated/prisma/client.js';
+import { PrismaService } from '../prisma/prisma.service.js';
+import { StorageService } from '../storage/storage.service.js';
+import { toDate, toIso } from './dates.js';
+import {
+  isEmptyResponse,
+  isFailure,
+  normalizeReading,
+  normalizeResponse,
+  visitIssues,
+  visitProgress,
+  type ReadingValues,
+  type ResponseValues,
+} from './engine.js';
+import { sniffImage } from './image-type.js';
+import { fieldView, itemView, num, stringList, toEngineField, toEngineItem } from './mapping.js';
+import { loadStructure, loadVisitState, refreshProgress } from './visit-state.js';
+import { AnswersInput, PhotoFields, ReviewInput, StartVisitInput, VisitListQuery } from './visits.schemas.js';
+
+type Tx = Prisma.TransactionClient;
+
+/** Visits the technician may still edit (a rejected visit goes back to work). */
+const EDITABLE: PmStatus[] = ['IN_PROGRESS', 'REJECTED'];
+const EQUIPMENT_FLAG: Record<SiteEquipment, 'generatorAvailable' | 'solarAvailable' | 'gridAvailable'> = {
+  GENERATOR: 'generatorAvailable',
+  SOLAR: 'solarAvailable',
+  GRID: 'gridAvailable',
+};
+
+const LIST_INCLUDE = {
+  site: { select: { id: true, siteCode: true, siteName: true, regionId: true } },
+  technician: { select: { id: true, fullName: true } },
+  template: { select: { id: true, code: true, name: true, version: true } },
+} as const;
+
+export interface UploadedFile {
+  buffer: Buffer;
+  size: number;
+}
+
+/**
+ * PM visits: a technician starts a visit at an assigned site, records answers,
+ * readings and photos (checked against the template version the visit started
+ * on), completes it when nothing required is missing, and a supervisor
+ * approves it or returns it for correction.
+ */
+@Injectable()
+export class VisitsService {
+  private readonly logger = new Logger(VisitsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+    private readonly config: AppConfig,
+  ) {}
+
+  // --- Start -----------------------------------------------------------------------
+
+  async start(input: unknown, caller: AuthUser) {
+    const data = parseInput(StartVisitInput, input);
+    const id = await this.prisma
+      .$transaction(async (tx) => {
+        if (data.id) {
+          const existing = await tx.pmVisit.findUnique({ where: { id: data.id } });
+          if (existing) {
+            if (existing.technicianId !== caller.id) throw new AppError(HttpStatus.CONFLICT, 'ID_CONFLICT', 'A different visit already uses this id.');
+            return existing.id; // a retried start (e.g. from an offline phone)
+          }
+        }
+
+        let siteId: string;
+        let templateId: string;
+        let scheduleId: string | null = null;
+        if (data.scheduleId) {
+          await tx.$queryRaw`SELECT id FROM pm_schedules WHERE id = ${data.scheduleId} FOR UPDATE`;
+          const schedule = await tx.pmSchedule.findUnique({ where: { id: data.scheduleId } });
+          if (!schedule) throw invalid('INVALID_REFERENCE', 'The schedule does not exist.');
+          await this.requireAssigned(tx, schedule.siteId, caller.id);
+          if (schedule.technicianId && schedule.technicianId !== caller.id) {
+            throw new AppError(HttpStatus.FORBIDDEN, 'NOT_YOUR_SCHEDULE', 'This PM is scheduled for another technician.');
+          }
+          const open = await tx.pmVisit.findFirst({ where: { scheduleId: schedule.id, status: { in: EDITABLE } } });
+          if (open) {
+            if (open.technicianId === caller.id) return open.id;
+            throw new AppError(HttpStatus.CONFLICT, 'VISIT_IN_PROGRESS', 'Another technician has already started this PM.');
+          }
+          if (schedule.status !== 'SCHEDULED' && schedule.status !== 'OVERDUE') {
+            throw invalid('SCHEDULE_NOT_OPEN', 'This PM is not open (it is completed or cancelled).');
+          }
+          siteId = schedule.siteId;
+          templateId = schedule.templateId;
+          scheduleId = schedule.id;
+          await tx.pmSchedule.update({
+            where: { id: schedule.id },
+            data: { status: 'IN_PROGRESS', technicianId: schedule.technicianId ?? caller.id, updatedById: caller.id },
+          });
+        } else {
+          siteId = data.siteId!;
+          await this.requireAssigned(tx, siteId, caller.id);
+          const active = await tx.pmTemplate.findMany({ where: { status: 'ACTIVE', ...(data.templateCode ? { code: data.templateCode.toUpperCase() } : {}) } });
+          if (active.length !== 1) {
+            throw invalid(active.length ? 'TEMPLATE_REQUIRED' : 'NO_ACTIVE_TEMPLATE', active.length ? 'Several templates are active: give the template code.' : 'There is no active PM template.');
+          }
+          templateId = active[0]!.id;
+        }
+
+        const site = await tx.site.findUniqueOrThrow({ where: { id: siteId } });
+        if (site.status !== 'ACTIVE') throw invalid('SITE_NOT_ACTIVE', 'PM can only be started at an active site.');
+        // Sections for equipment the site does not have start as not applicable.
+        const sections = await tx.pmSection.findMany({ where: { templateId, isActive: true } });
+        const notApplicable = sections.filter((s) => s.allowNotApplicable && s.requiresEquipment && !site[EQUIPMENT_FLAG[s.requiresEquipment]]).map((s) => s.code);
+
+        const visit = await tx.pmVisit.create({
+          data: {
+            id: data.id ?? randomUUID(),
+            scheduleId,
+            siteId,
+            templateId,
+            technicianId: caller.id,
+            status: 'IN_PROGRESS',
+            startedAt: new Date(),
+            notApplicableSections: notApplicable,
+            clientCreatedAt: data.clientCreatedAt ? new Date(data.clientCreatedAt) : null,
+            createdById: caller.id,
+            updatedById: caller.id,
+          },
+        });
+        await this.refreshProgress(tx, visit);
+        return visit.id;
+      })
+      .catch(rethrowDbError);
+    return this.get(id, caller);
+  }
+
+  // --- Answers and readings ----------------------------------------------------------
+
+  /**
+   * Saves answers and readings (all or nothing: one invalid value rejects the
+   * batch with every problem listed). An answer with no value clears it. A
+   * value recorded on the phone before the stored one is ignored and listed
+   * under `skipped`.
+   */
+  async saveAnswers(visitId: string, input: unknown, caller: AuthUser) {
+    const data = parseInput(AnswersInput, input);
+    const skipped = await this.prisma
+      .$transaction(async (tx) => {
+        const visit = await this.requireOwnEditable(tx, visitId, caller);
+        const structure = await loadStructure(tx, visit.templateId);
+        const items = new Map(structure.items.map((i) => [i.id, i]));
+        const fields = new Map(structure.fields.map((f) => [f.id, f]));
+        const problems: { path: string; message: string }[] = [];
+
+        let notApplicable: string[] | undefined;
+        if (data.notApplicableSections) {
+          notApplicable = [...new Set(data.notApplicableSections)];
+          notApplicable.forEach((code, i) => {
+            const s = structure.sections.find((x) => x.code === code && x.isActive);
+            if (!s) problems.push({ path: `notApplicableSections.${i}`, message: `no section ${code} in this template` });
+            else if (!s.allowNotApplicable) problems.push({ path: `notApplicableSections.${i}`, message: `${s.name} cannot be marked not applicable` });
+          });
+        }
+
+        const responses: { itemId: string; values: ResponseValues; clientUpdatedAt: Date | null }[] = [];
+        data.responses.forEach((r, i) => {
+          const item = items.get(r.checklistItemId);
+          if (!item || !item.isActive) return problems.push({ path: `responses.${i}.checklistItemId`, message: 'not a question of this visit’s template' });
+          const res = normalizeResponse(toEngineItem(item), {
+            answer: r.answer ?? null,
+            numericValue: r.numericValue ?? null,
+            textValue: r.textValue ?? null,
+            selectedOptions: r.selectedOptions ?? null,
+            dateValue: r.dateValue ?? null,
+            datetimeValue: r.datetimeValue ?? null,
+            comment: r.comment ?? null,
+          });
+          if (!res.ok) return problems.push({ path: `responses.${i}`, message: res.error });
+          responses.push({ itemId: item.id, values: res.value, clientUpdatedAt: r.clientUpdatedAt ? new Date(r.clientUpdatedAt) : null });
+        });
+
+        const readings: { fieldId: string; values: ReadingValues; clientUpdatedAt: Date | null }[] = [];
+        data.readings.forEach((r, i) => {
+          const field = fields.get(r.readingFieldId);
+          if (!field || !field.isActive) return problems.push({ path: `readings.${i}.readingFieldId`, message: 'not a reading of this visit’s template' });
+          const res = normalizeReading(toEngineField(field), { numericValue: r.numericValue ?? null, textValue: r.textValue ?? null });
+          if (!res.ok) return problems.push({ path: `readings.${i}`, message: res.error });
+          readings.push({ fieldId: field.id, values: res.value, clientUpdatedAt: r.clientUpdatedAt ? new Date(r.clientUpdatedAt) : null });
+        });
+
+        if (problems.length) throw invalid('VALIDATION_FAILED', 'Some answers are not valid. Nothing was saved.', problems);
+
+        const skipped: { type: 'response' | 'reading'; id: string }[] = [];
+        const now = new Date();
+        for (const r of responses) {
+          const stored = await tx.pmResponse.findUnique({ where: { visitId_checklistItemId: { visitId, checklistItemId: r.itemId } } });
+          if (stored?.clientUpdatedAt && r.clientUpdatedAt && r.clientUpdatedAt < stored.clientUpdatedAt) {
+            skipped.push({ type: 'response', id: r.itemId });
+            continue;
+          }
+          if (isEmptyResponse(r.values)) {
+            if (stored) await tx.pmResponse.delete({ where: { id: stored.id } });
+            continue;
+          }
+          const item = items.get(r.itemId)!;
+          const values = {
+            answer: r.values.answer,
+            numericValue: r.values.numericValue,
+            textValue: r.values.textValue,
+            selectedOptions: r.values.selectedOptions ?? undefined,
+            dateValue: r.values.dateValue ? toDate(r.values.dateValue) : null,
+            datetimeValue: r.values.datetimeValue ? new Date(r.values.datetimeValue) : null,
+            comment: r.values.comment,
+            isFailure: isFailure(toEngineItem(item), r.values.answer),
+            promptSnapshot: item.prompt,
+            unitSnapshot: item.unit,
+            answeredAt: now,
+            answeredById: caller.id,
+            clientUpdatedAt: r.clientUpdatedAt,
+          };
+          await tx.pmResponse.upsert({
+            where: { visitId_checklistItemId: { visitId, checklistItemId: r.itemId } },
+            create: { visitId, checklistItemId: r.itemId, ...values },
+            update: { ...values, selectedOptions: r.values.selectedOptions ?? [] },
+          });
+        }
+        for (const r of readings) {
+          const stored = await tx.pmReading.findUnique({ where: { visitId_readingFieldId: { visitId, readingFieldId: r.fieldId } } });
+          if (stored?.clientUpdatedAt && r.clientUpdatedAt && r.clientUpdatedAt < stored.clientUpdatedAt) {
+            skipped.push({ type: 'reading', id: r.fieldId });
+            continue;
+          }
+          if (r.values.numericValue == null && r.values.textValue == null) {
+            if (stored) await tx.pmReading.delete({ where: { id: stored.id } });
+            continue;
+          }
+          const field = fields.get(r.fieldId)!;
+          const values = {
+            numericValue: r.values.numericValue,
+            textValue: r.values.textValue,
+            labelSnapshot: field.label,
+            unitSnapshot: field.unit,
+            capturedAt: now,
+            clientUpdatedAt: r.clientUpdatedAt,
+          };
+          await tx.pmReading.upsert({
+            where: { visitId_readingFieldId: { visitId, readingFieldId: r.fieldId } },
+            create: { visitId, readingFieldId: r.fieldId, ...values },
+            update: values,
+          });
+        }
+
+        const updated = await tx.pmVisit.update({
+          where: { id: visitId },
+          data: {
+            ...(notApplicable ? { notApplicableSections: notApplicable } : {}),
+            ...(data.overallComments !== undefined ? { overallComments: data.overallComments } : {}),
+            ...(visit.status === 'REJECTED' ? { status: 'IN_PROGRESS' as const } : {}),
+            updatedById: caller.id,
+          },
+        });
+        if (visit.status === 'REJECTED' && visit.scheduleId) {
+          await tx.pmSchedule.update({ where: { id: visit.scheduleId }, data: { status: 'IN_PROGRESS' } });
+        }
+        await this.refreshProgress(tx, updated);
+        return skipped;
+      })
+      .catch(rethrowDbError);
+    return { ...(await this.get(visitId, caller)), skipped };
+  }
+
+  // --- Complete and review ---------------------------------------------------------------
+
+  /** Finishes the visit when nothing blocks it; otherwise lists what is missing. */
+  async complete(visitId: string, caller: AuthUser) {
+    await this.prisma.$transaction(async (tx) => {
+      const visit = await this.requireOwnEditable(tx, visitId, caller);
+      const state = await loadVisitState(tx, visit);
+      const issues = visitIssues(state);
+      if (issues.length) {
+        throw new AppError(
+          HttpStatus.UNPROCESSABLE_ENTITY,
+          'VISIT_INCOMPLETE',
+          `Unable to complete: ${issues.length} item${issues.length === 1 ? ' needs' : 's need'} attention.`,
+          issues,
+        );
+      }
+      const progress = visitProgress(state);
+      await tx.pmVisit.update({
+        where: { id: visitId },
+        data: {
+          status: 'COMPLETED',
+          completedAt: new Date(),
+          completionPct: progress.completionPct,
+          failureCount: progress.failureCount,
+          reviewedById: null,
+          reviewedAt: null,
+          updatedById: caller.id,
+        },
+      });
+      if (visit.scheduleId) await tx.pmSchedule.update({ where: { id: visit.scheduleId }, data: { status: 'COMPLETED' } });
+    });
+    return this.get(visitId, caller);
+  }
+
+  /** A supervisor approves a completed visit, or returns it to the technician with comments. */
+  async review(visitId: string, input: unknown, caller: AuthUser) {
+    const data = parseInput(ReviewInput, input);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM pm_visits WHERE id = ${visitId} FOR UPDATE`;
+      const visit = await tx.pmVisit.findUnique({ where: { id: visitId }, include: { site: { select: { regionId: true } } } });
+      if (!visit || !managesRegion(caller, visit.site.regionId)) throw notFound('Visit');
+      if (visit.technicianId === caller.id) throw new AppError(HttpStatus.FORBIDDEN, 'OWN_VISIT', 'You cannot review your own PM.');
+      if (visit.status !== 'COMPLETED') throw invalid('VISIT_NOT_COMPLETED', 'Only a completed PM can be reviewed.');
+      const status = data.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED';
+      await tx.pmVisit.update({
+        where: { id: visitId },
+        data: { status, reviewedById: caller.id, reviewedAt: new Date(), reviewComments: data.comments, updatedById: caller.id },
+      });
+      if (visit.scheduleId) await tx.pmSchedule.update({ where: { id: visit.scheduleId }, data: { status } });
+    });
+    return this.get(visitId, caller);
+  }
+
+  // --- Reading ---------------------------------------------------------------------------
+
+  async list(query: unknown, caller: AuthUser) {
+    const q = parseInput(VisitListQuery, query);
+    const scope = siteScope(caller);
+    const where = within<Prisma.PmVisitWhereInput>(scope ? { site: scope } : undefined, {
+      AND: [
+        q.siteId ? { siteId: q.siteId } : {},
+        q.technicianId ? { technicianId: q.technicianId } : {},
+        q.mine ? { technicianId: caller.id } : {},
+        q.status ? { status: q.status } : {},
+        q.from ? { startedAt: { gte: toDate(q.from) } } : {},
+        q.to ? { startedAt: { lt: new Date(toDate(q.to).getTime() + 86_400_000) } } : {},
+      ],
+    });
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.pmVisit.findMany({ where, include: LIST_INCLUDE, orderBy: [{ startedAt: 'desc' }, { id: 'asc' }], skip: (q.page - 1) * q.pageSize, take: q.pageSize }),
+      this.prisma.pmVisit.count({ where }),
+    ]);
+    return {
+      items: items.map((v) => ({ ...v, completionPct: num(v.completionPct), notApplicableSections: stringList(v.notApplicableSections) })),
+      total,
+      page: q.page,
+      pageSize: q.pageSize,
+    };
+  }
+
+  /** The visit with its template structure, answers, readings, photos, progress and open issues. */
+  async get(visitId: string, caller: AuthUser) {
+    const scope = siteScope(caller);
+    const visit = await this.prisma.pmVisit.findFirst({
+      where: within<Prisma.PmVisitWhereInput>(scope ? { site: scope } : undefined, { id: visitId }),
+      include: {
+        ...LIST_INCLUDE,
+        schedule: { select: { id: true, scheduledDate: true, dueDate: true, priority: true } },
+        reviewedBy: { select: { id: true, fullName: true } },
+      },
+    });
+    if (!visit) throw notFound('Visit');
+    const [structure, responses, readings, photos, state] = await Promise.all([
+      loadStructure(this.prisma, visit.templateId),
+      this.prisma.pmResponse.findMany({ where: { visitId } }),
+      this.prisma.pmReading.findMany({ where: { visitId } }),
+      this.prisma.pmPhoto.findMany({ where: { visitId }, orderBy: { createdAt: 'asc' }, omit: { storageKey: true } }),
+      loadVisitState(this.prisma, visit),
+    ]);
+    const progress = visitProgress(state);
+    return {
+      ...visit,
+      completionPct: num(visit.completionPct),
+      notApplicableSections: stringList(visit.notApplicableSections),
+      schedule: visit.schedule ? { ...visit.schedule, scheduledDate: toIso(visit.schedule.scheduledDate), dueDate: toIso(visit.schedule.dueDate) } : null,
+      sections: structure.sections
+        .filter((s) => s.isActive)
+        .map((s) => ({
+          ...s,
+          items: structure.items.filter((i) => i.sectionId === s.id && i.isActive).map(itemView),
+          readingFields: structure.fields.filter((f) => f.sectionId === s.id && f.isActive).map(fieldView),
+        })),
+      responses: responses.map((r) => ({
+        ...r,
+        numericValue: num(r.numericValue),
+        selectedOptions: r.selectedOptions == null ? null : stringList(r.selectedOptions),
+        dateValue: r.dateValue ? toIso(r.dateValue) : null,
+      })),
+      readings: readings.map((r) => ({ ...r, numericValue: num(r.numericValue) })),
+      photos,
+      progress,
+      issues: EDITABLE.includes(visit.status) ? visitIssues(state) : [],
+    };
+  }
+
+  // --- Photos ----------------------------------------------------------------------------
+
+  async addPhoto(visitId: string, file: UploadedFile | undefined, fields: unknown, caller: AuthUser) {
+    const data = parseInput(PhotoFields, fields ?? {});
+    if (!file || file.size === 0) throw invalid('FILE_REQUIRED', 'Attach the photo as the "file" field.');
+    if (file.size > this.config.photoMaxBytes) {
+      throw new AppError(HttpStatus.PAYLOAD_TOO_LARGE, 'PAYLOAD_TOO_LARGE', `A photo can be at most ${Math.floor(this.config.photoMaxBytes / 1_000_000)} MB.`);
+    }
+    const type = sniffImage(file.buffer);
+    if (!type) throw new AppError(HttpStatus.UNSUPPORTED_MEDIA_TYPE, 'UNSUPPORTED_MEDIA_TYPE', 'Photos must be JPEG, PNG or WebP images.');
+
+    // Checks first (no file is written for a request that will be refused).
+    const visit = await this.prisma.$transaction((tx) => this.requireOwnEditable(tx, visitId, caller));
+    if (data.id) {
+      const existing = await this.prisma.pmPhoto.findUnique({ where: { id: data.id }, omit: { storageKey: true } });
+      if (existing) {
+        if (existing.visitId !== visitId) throw new AppError(HttpStatus.CONFLICT, 'ID_CONFLICT', 'A different photo already uses this id.');
+        return existing; // a retried upload
+      }
+    }
+    if (data.checklistItemId) {
+      const item = await this.prisma.pmChecklistItem.findFirst({ where: { id: data.checklistItemId, section: { templateId: visit.templateId } } });
+      if (!item) throw invalid('INVALID_REFERENCE', 'The question is not part of this visit’s template.');
+    }
+
+    const id = data.id ?? randomUUID();
+    const storageKey = `pm/visits/${visitId}/${id}.${type.ext}`;
+    await this.storage.put(storageKey, file.buffer, type.contentType);
+    try {
+      return await this.prisma.pmPhoto.create({
+        data: {
+          id,
+          visitId,
+          checklistItemId: data.checklistItemId ?? null,
+          storageKey,
+          contentType: type.contentType,
+          sizeBytes: file.size,
+          sha256: createHash('sha256').update(file.buffer).digest('hex'),
+          caption: data.caption ?? null,
+          takenAt: data.takenAt ? new Date(data.takenAt) : null,
+          uploadedById: caller.id,
+        },
+        omit: { storageKey: true },
+      });
+    } catch (e) {
+      await this.storage.delete(storageKey).catch((err: unknown) => this.logger.error({ err, storageKey }, 'Could not remove an orphaned photo file'));
+      return rethrowDbError(e);
+    }
+  }
+
+  /** The photo file, if the caller may see the visit. */
+  async photoFile(visitId: string, photoId: string, caller: AuthUser) {
+    const scope = siteScope(caller);
+    const photo = await this.prisma.pmPhoto.findFirst({
+      where: { id: photoId, visitId, visit: within<Prisma.PmVisitWhereInput>(scope ? { site: scope } : undefined, {}) },
+    });
+    if (!photo) throw notFound('Photo');
+    return { data: await this.storage.get(photo.storageKey), contentType: photo.contentType };
+  }
+
+  async deletePhoto(visitId: string, photoId: string, caller: AuthUser) {
+    const key = await this.prisma.$transaction(async (tx) => {
+      await this.requireOwnEditable(tx, visitId, caller);
+      const photo = await tx.pmPhoto.findFirst({ where: { id: photoId, visitId } });
+      if (!photo) throw notFound('Photo');
+      await tx.pmPhoto.delete({ where: { id: photoId } });
+      return photo.storageKey;
+    });
+    await this.storage.delete(key).catch((err: unknown) => this.logger.error({ err, key }, 'Could not remove a deleted photo file'));
+  }
+
+  // --- Helpers -------------------------------------------------------------------------
+
+  /** The technician must be actively assigned to the site to work there. */
+  private async requireAssigned(tx: Tx, siteId: string, userId: string) {
+    const assigned = await tx.siteAssignment.count({ where: { siteId, userId, role: 'TECHNICIAN', active: true } });
+    if (!assigned) throw new AppError(HttpStatus.FORBIDDEN, 'NOT_ASSIGNED', 'You are not assigned to this site.');
+  }
+
+  /** Locks the visit; it must be the caller's and still editable. */
+  private async requireOwnEditable(tx: Tx, visitId: string, caller: AuthUser): Promise<PmVisit> {
+    await tx.$queryRaw`SELECT id FROM pm_visits WHERE id = ${visitId} FOR UPDATE`;
+    const visit = await tx.pmVisit.findUnique({ where: { id: visitId } });
+    if (!visit) throw notFound('Visit');
+    if (visit.technicianId !== caller.id) {
+      const scope = siteScope(caller);
+      const visible = await tx.pmVisit.count({ where: within<Prisma.PmVisitWhereInput>(scope ? { site: scope } : undefined, { id: visitId }) });
+      if (!visible) throw notFound('Visit');
+      throw new AppError(HttpStatus.FORBIDDEN, 'NOT_YOUR_VISIT', 'Only the technician carrying out this PM can change it.');
+    }
+    if (!EDITABLE.includes(visit.status)) throw new AppError(HttpStatus.CONFLICT, 'VISIT_LOCKED', `This PM is ${visit.status.toLowerCase().replace('_', ' ')} and can no longer be changed.`);
+    return visit;
+  }
+
+  private refreshProgress(tx: Tx, visit: Pick<PmVisit, 'id' | 'templateId' | 'notApplicableSections'>) {
+    return refreshProgress(tx, visit);
+  }
+}

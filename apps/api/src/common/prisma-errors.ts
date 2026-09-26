@@ -25,7 +25,21 @@ const UNIQUE_FIELDS: Record<string, string> = {
   counties_code_key: 'code',
   counties_cluster_id_name_key: 'name',
   sites_site_code_key: 'siteCode',
+  pm_templates_code_version_key: 'version',
+  pm_sections_template_id_code_key: 'code',
+  pm_checklist_items_section_id_code_key: 'code',
+  pm_reading_fields_section_id_code_key: 'code',
+  pm_consistency_rules_lhs_key_operator_rhs_key_key: 'rule',
 };
+
+/** Messages raised by our triggers (SIGNAL 45000) → API error code and status. */
+function triggerError(message: string): AppError {
+  const text = message.replace(/^\w+: /, '');
+  if (message.includes('draft template version')) return new AppError(HttpStatus.CONFLICT, 'TEMPLATE_NOT_DRAFT', 'Only a draft template version can be changed. Create a new version first.');
+  if (message.includes('already active')) return new AppError(HttpStatus.CONFLICT, 'TEMPLATE_ALREADY_ACTIVE', 'Another version of this template is already active.');
+  if (message.includes('retired version')) return new AppError(HttpStatus.CONFLICT, 'TEMPLATE_RETIRED', 'A retired version cannot be reactivated; create a new version.');
+  return new AppError(HttpStatus.UNPROCESSABLE_ENTITY, 'HIERARCHY_MISMATCH', text || 'Organisation hierarchy mismatch.');
+}
 
 /**
  * Turns database constraint errors into API errors. The services validate
@@ -47,8 +61,8 @@ export function rethrowDbError(e: unknown): never {
     throw new AppError(HttpStatus.UNPROCESSABLE_ENTITY, 'INVALID_VALUE', 'A value is outside its allowed range.');
   }
   if (cause?.originalCode === '1644') {
-    // Raised by our own triggers (SIGNAL 45000) with a message written for users.
-    throw new AppError(HttpStatus.UNPROCESSABLE_ENTITY, 'HIERARCHY_MISMATCH', (cause.originalMessage ?? '').replace(/^\w+: /, '') || 'Organisation hierarchy mismatch.');
+    // Raised by our own triggers (SIGNAL 45000).
+    throw triggerError(cause.originalMessage ?? '');
   }
   throw e;
 }

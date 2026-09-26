@@ -82,6 +82,61 @@ Access tokens last `JWT_ACCESS_TTL` (15 min), refresh tokens `JWT_REFRESH_TTL`
 | POST | `/assignments` | `assignments.manage` — `{ siteId, userId, role, startDate }`; supervisors only on sites in their regions and only technicians |
 | POST | `/assignments/:id/end` | `assignments.manage` — `{ endDate, reason? }` |
 
+## PM templates
+
+A template has versions. A version's structure (sections, questions,
+readings, failure rules) is edited only while it is a **DRAFT** — also
+enforced by the database. Activating a draft retires the previous version and
+moves open schedules to it; visits keep the version they started on.
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/pm-templates`, `/pm-templates/:id` | `pm_templates.read` — `:id` returns sections → questions and readings |
+| POST | `/pm-templates` | `pm_templates.manage` — `{ code, name, description? }` → draft version 1 |
+| PATCH / DELETE | `/pm-templates/:id` | `pm_templates.manage` — drafts only |
+| POST | `/pm-templates/:id/new-version` | `pm_templates.manage` — draft copy (one draft per template) |
+| POST | `/pm-templates/:id/activate` | `pm_templates.manage` |
+| POST | `/pm-templates/:id/sections`; PATCH / DELETE `/pm-sections/:id` | `pm_templates.manage` |
+| POST | `/pm-sections/:id/items`; PATCH / DELETE `/pm-items/:id` | `pm_templates.manage` |
+| POST | `/pm-sections/:id/reading-fields`; PATCH / DELETE `/pm-reading-fields/:id` | `pm_templates.manage` |
+| GET / POST | `/pm-consistency-rules`; PATCH `/pm-consistency-rules/:id` | read: `pm_templates.read`; change: `pm_templates.manage` |
+
+Question types: `YES_NO_NA`, `NUMBER`, `TEXT`, `SELECT`, `MULTI_SELECT`,
+`DATE`, `DATETIME`, `PHOTO`. Failure rule: `failureOnAnswer` (YES or NO) with
+`failureSeverity`, and optional comment / photo evidence on failure or on
+given answers. Minimum, maximum and whole-number rules apply only where set.
+
+## PM schedules
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/pm-schedules?siteId&technicianId&status&mine&from&to` | `pm_schedules.read` (scoped) |
+| GET | `/pm-schedules/:id` | `pm_schedules.read` (scoped) |
+| POST | `/pm-schedules` | `pm_schedules.manage` — `{ siteId, technicianId?, templateCode?, frequency, scheduledDate, dueDate, occurrences?, priority?, notes? }`; the technician must be assigned to the site; recurring plans create one schedule per occurrence |
+| PATCH | `/pm-schedules/:id` | `pm_schedules.manage` — while scheduled / overdue |
+| POST | `/pm-schedules/:id/cancel` | `pm_schedules.manage` — `{ reason }` |
+
+Statuses: SCHEDULED, IN_PROGRESS, COMPLETED, APPROVED, REJECTED, OVERDUE,
+CANCELLED. Scheduled PMs past their due date (in `ORG_TIMEZONE`) become
+OVERDUE at start-up and hourly.
+
+## PM visits
+
+| Method | Path | Permission |
+|---|---|---|
+| POST | `/visits` | `pm_visits.perform` — `{ id?, scheduleId }` or `{ id?, siteId, templateCode? }`; only a technician assigned to the site; retrying with the same `id` returns the same visit |
+| GET | `/visits?siteId&technicianId&status&mine&from&to`, `/visits/:id` | `pm_visits.read` (scoped) — the detail includes the template structure, answers, readings, photos, progress and open issues |
+| PUT | `/visits/:id/answers` | `pm_visits.perform`, own visit — `{ responses?, readings?, notApplicableSections?, overallComments? }`; all or nothing; an answer without values clears it; an edit with an older `clientUpdatedAt` than the stored one is skipped |
+| POST | `/visits/:id/complete` | `pm_visits.perform`, own visit — 422 `VISIT_INCOMPLETE` lists every missing answer, reading, comment, photo or inconsistency |
+| POST | `/visits/:id/review` | `pm_visits.review` — `{ decision: APPROVE \| REJECT, comments? }` (comments required to reject); not one's own visit |
+| POST | `/visits/:id/photos` | `pm_visits.perform`, own visit — multipart: `file` (JPEG / PNG / WebP by content, at most `PHOTO_MAX_BYTES`), `id?`, `checklistItemId?`, `caption?`, `takenAt?` |
+| GET | `/visits/:id/photos/:photoId` | `pm_visits.read` (scoped) — the image |
+| DELETE | `/visits/:id/photos/:photoId` | `pm_visits.perform`, own editable visit |
+
+Visit flow: IN_PROGRESS → COMPLETED → APPROVED, or REJECTED → (technician
+edits) IN_PROGRESS → COMPLETED. Completion % counts required answers and
+readings in applicable sections (rounded down, so 100 % means complete).
+
 ## Health
 
 `GET /health` (liveness) and `GET /health/ready` (MySQL reachable) are public.

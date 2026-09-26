@@ -18,7 +18,9 @@ import type { AppConfig } from './config/app-config.js';
 import { ConfigModule } from './config/config.module.js';
 import { HealthModule } from './health/health.module.js';
 import { OrganisationModule } from './organisation/organisation.module.js';
+import { PmModule } from './pm/pm.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { StorageModule } from './storage/storage.module.js';
 import { UsersModule } from './users/users.module.js';
 
 @Module({})
@@ -55,12 +57,14 @@ export class AppModule {
           ],
         }),
         PrismaModule,
+        StorageModule,
         AuthModule,
         AuthzModule,
         HealthModule,
         OrganisationModule,
         UsersModule,
         AssignmentsModule,
+        PmModule,
         ...extra,
       ],
       providers: [

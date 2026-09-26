@@ -23,7 +23,13 @@ describe('loadConfig', () => {
     expect(c.version).toBeNull();
     expect(c.auth).toEqual({ maxFailedLogins: 5, lockoutMinutes: 15, rateLimitPerMinute: 10, refreshReuseGraceSeconds: 10 });
     expect(c.webForwardSecret).toBeNull();
+    expect(c.orgTimezone).toBe('Africa/Monrovia');
+    expect(c.photoMaxBytes).toBe(10_000_000);
     expect(Object.isFrozen(c)).toBe(true);
+  });
+
+  it('rejects an unknown time zone', () => {
+    expect(() => loadConfig({ ...valid, ORG_TIMEZONE: 'Mars/Olympus' })).toThrow(/ORG_TIMEZONE: must be an IANA time zone/);
   });
 
   it('treats an empty web forward secret as unset and rejects a short one', () => {

@@ -3,6 +3,7 @@ import { PERMISSIONS, SYSTEM_ROLES } from '../src/authz/catalog.js';
 import { DEMO, removeDemoData, seedDemoData } from '../src/seed/demo.js';
 import { createFirstAdmin } from '../src/seed/first-admin.js';
 import { seedReferenceData } from '../src/seed/reference.js';
+import { seedReferenceTemplate } from '../src/seed/reference-template.js';
 import { resetData, testPrisma } from './db.js';
 import { makeOrg, services } from './fixtures.js';
 
@@ -104,5 +105,21 @@ describe('first Super Admin (installation bootstrap)', () => {
     await expect(createFirstAdmin(prisma, { email: 'not-an-email', fullName: 'X', password: 'a-long-first-password' })).rejects.toThrow(/e-mail/);
     await expect(createFirstAdmin(prisma, { email: 'long.address@example.com', fullName: 'X', password: 'long.address@example.com' })).rejects.toThrow(/must not be/);
     expect(await prisma.user.count()).toBe(0);
+  });
+});
+
+describe('reference PM template seed', () => {
+  it('creates version 1 once and never changes it afterwards', async () => {
+    // resetData already seeded it.
+    const again = await seedReferenceTemplate(prisma);
+    expect(again).toEqual({ templateCreated: false, rulesCreated: 0 });
+    const t = await prisma.pmTemplate.findMany({ include: { _count: { select: { sections: true } } } });
+    expect(t.map((x) => [x.code, x.version, x.status, x._count.sections])).toEqual([['TELECOM_SITE_POWER_PM', 1, 'ACTIVE', 6]]);
+    expect(await prisma.pmChecklistItem.count()).toBe(69);
+    expect(await prisma.pmReadingField.count()).toBe(16);
+    expect(await prisma.pmConsistencyRule.count()).toBe(3);
+    // No engineering limits: only definitional bounds (≥ 0, percent ≤ 100).
+    const maxima = await prisma.pmReadingField.findMany({ where: { maxValue: { not: null } }, select: { code: true, maxValue: true } });
+    expect(maxima.map((m) => [m.code, Number(m.maxValue)])).toEqual([['fuel_level', 100]]);
   });
 });

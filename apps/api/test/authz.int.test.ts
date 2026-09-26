@@ -105,6 +105,12 @@ describe('permissions by role', () => {
     ['POST', () => '/users', ['admin']],
     ['POST', () => `/users/${ids.techA}/unlock`, ['admin']],
     ['POST', () => '/assignments', ['admin', 'supervisor']],
+    ['GET', () => '/pm-templates', ['admin', 'manager', 'supervisor', 'technician', 'viewer']],
+    ['POST', () => '/pm-templates', ['admin']],
+    ['GET', () => '/pm-schedules', ['admin', 'manager', 'supervisor', 'technician', 'viewer']],
+    ['POST', () => '/pm-schedules', ['admin', 'supervisor']],
+    ['GET', () => '/visits', ['admin', 'manager', 'supervisor', 'technician', 'viewer']],
+    ['POST', () => '/visits', ['admin', 'technician']],
   ];
   const roles = ['admin', 'manager', 'supervisor', 'technician', 'maintenance', 'viewer'] as const;
 

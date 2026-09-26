@@ -64,10 +64,14 @@ model User {
   createdBy     User?   @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy     User?   @relation("UserUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
 
-  roles           UserRole[]        @relation("UserRoleUser")
-  regionScopes    UserRegionScope[] @relation("UserRegionScopeUser")
-  siteAssignments SiteAssignment[]  @relation("SiteAssignmentUser")
-  refreshTokens   RefreshToken[]
+  roles            UserRole[]        @relation("UserRoleUser")
+  regionScopes     UserRegionScope[] @relation("UserRegionScopeUser")
+  siteAssignments  SiteAssignment[]  @relation("SiteAssignmentUser")
+  refreshTokens    RefreshToken[]
+  pmSchedules      PmSchedule[]      @relation("PmScheduleTechnician")
+  pmVisits         PmVisit[]         @relation("PmVisitTechnician")
+  pmVisitsReviewed PmVisit[]         @relation("PmVisitReviewer")
+  pmPhotos         PmPhoto[]
 
   // Audit back-relations (who created / changed what).
   usersCreated     User[]            @relation("UserCreatedBy")
@@ -306,6 +310,8 @@ model Site {
   updatedBy User?    @relation("SiteUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
 
   assignments SiteAssignment[]
+  pmSchedules PmSchedule[]
+  pmVisits    PmVisit[]
 
   @@index([siteName])
   @@index([regionId])
@@ -348,4 +354,397 @@ model SiteAssignment {
   @@index([userId, active])
   @@index([startDate])
   @@map("site_assignments")
+}
+
+// -----------------------------------------------------------------------------
+// PM engine: templates (versioned) → sections → checklist items / reading
+// fields; schedules; visits with responses, readings and photos.
+//
+// - A template version is edited only while DRAFT. Activating it retires the
+//   previous ACTIVE version of the same code (one ACTIVE per code, also
+//   enforced by a trigger) and moves open schedules to it; visits keep the
+//   version they started on.
+// - Nothing here holds engineering limits: min/max values exist only where an
+//   administrator sets them (the reference template sets definitional bounds
+//   only, e.g. percent 0–100, counts >= 0).
+// - created_by / updated_by on these tables record who made a change; the full
+//   history is in the audit log (Phase 13).
+// -----------------------------------------------------------------------------
+
+enum TemplateStatus {
+  DRAFT
+  ACTIVE
+  RETIRED
+}
+
+enum PmCategory {
+  GENERATOR
+  DC_SYSTEM
+  BATTERY
+  SOLAR
+  NON_TECHNICAL
+  EARTHING
+  OTHER
+}
+
+/// Site equipment flag that makes a section not applicable when the site lacks it.
+enum SiteEquipment {
+  GENERATOR
+  SOLAR
+  GRID
+}
+
+enum ResponseType {
+  YES_NO_NA
+  NUMBER
+  TEXT
+  SELECT
+  MULTI_SELECT
+  DATE
+  DATETIME
+  PHOTO
+}
+
+enum ReadingValueType {
+  NUMBER
+  TEXT
+  SELECT
+}
+
+enum Answer {
+  YES
+  NO
+  NA
+}
+
+enum YesNo {
+  YES
+  NO
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum PmFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  BIMONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+  AD_HOC
+}
+
+/// SCHEDULED → IN_PROGRESS → COMPLETED (technician finished, awaiting review)
+/// → APPROVED | REJECTED (returned to the technician); OVERDUE when still
+/// open after the due date; CANCELLED.
+enum PmStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  APPROVED
+  REJECTED
+  OVERDUE
+  CANCELLED
+}
+
+model PmTemplate {
+  id          String         @id @default(uuid(7)) @db.Char(36)
+  code        String         @db.VarChar(40)
+  name        String         @db.VarChar(120)
+  version     Int            @db.UnsignedSmallInt
+  status      TemplateStatus @default(DRAFT)
+  description String?        @db.VarChar(1000)
+  activatedAt DateTime?      @map("activated_at")
+  retiredAt   DateTime?      @map("retired_at")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+  createdById String?        @map("created_by") @db.Char(36)
+  updatedById String?        @map("updated_by") @db.Char(36)
+
+  sections  PmSection[]
+  schedules PmSchedule[]
+  visits    PmVisit[]
+
+  @@unique([code, version])
+  @@index([status])
+  @@map("pm_templates")
+}
+
+model PmSection {
+  id                 String         @id @default(uuid(7)) @db.Char(36)
+  templateId         String         @map("template_id") @db.Char(36)
+  code               String         @db.VarChar(40)
+  name               String         @db.VarChar(120)
+  category           PmCategory
+  sortOrder          Int            @default(0) @map("sort_order") @db.SmallInt
+  description        String?        @db.VarChar(1000)
+  allowNotApplicable Boolean        @default(false) @map("allow_not_applicable")
+  /// The section is not applicable (by default) at sites without this equipment.
+  requiresEquipment  SiteEquipment? @map("requires_equipment")
+  isActive           Boolean        @default(true) @map("is_active")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  createdById        String?        @map("created_by") @db.Char(36)
+  updatedById        String?        @map("updated_by") @db.Char(36)
+
+  template      PmTemplate        @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  items         PmChecklistItem[]
+  readingFields PmReadingField[]
+
+  @@unique([templateId, code])
+  @@index([templateId, sortOrder])
+  @@map("pm_sections")
+}
+
+/// A question of the checklist. `failureOnAnswer` is the failure rule: the
+/// answer (YES or NO) that records a failure of `failureSeverity`.
+model PmChecklistItem {
+  id                       String       @id @default(uuid(7)) @db.Char(36)
+  sectionId                String       @map("section_id") @db.Char(36)
+  code                     String       @db.VarChar(60)
+  prompt                   String       @db.VarChar(500)
+  helpText                 String?      @map("help_text") @db.VarChar(1000)
+  responseType             ResponseType @default(YES_NO_NA) @map("response_type")
+  /// Choices for SELECT / MULTI_SELECT (JSON array of strings).
+  options                  Json?
+  allowNotApplicable       Boolean      @default(true) @map("allow_not_applicable")
+  isRequired               Boolean      @default(true) @map("is_required")
+  unit                     String?      @db.VarChar(20)
+  minValue                 Decimal?     @map("min_value") @db.Decimal(18, 6)
+  maxValue                 Decimal?     @map("max_value") @db.Decimal(18, 6)
+  isInteger                Boolean      @default(false) @map("is_integer")
+  failureOnAnswer          YesNo?       @map("failure_on_answer")
+  failureSeverity          Severity     @default(MEDIUM) @map("failure_severity")
+  requiresPhotoOnFailure   Boolean      @default(false) @map("requires_photo_on_failure")
+  requiresCommentOnFailure Boolean      @default(false) @map("requires_comment_on_failure")
+  /// Answers that need a photo / a comment whether or not they are failures (JSON array of YES|NO|NA).
+  photoOnAnswers           Json?        @map("photo_on_answers")
+  commentOnAnswers         Json?        @map("comment_on_answers")
+  photoInstructions        String?      @map("photo_instructions") @db.VarChar(500)
+  analyticsKey             String?      @map("analytics_key") @db.VarChar(80)
+  sortOrder                Int          @default(0) @map("sort_order") @db.SmallInt
+  isActive                 Boolean      @default(true) @map("is_active")
+  createdAt                DateTime     @default(now()) @map("created_at")
+  updatedAt                DateTime     @updatedAt @map("updated_at")
+  createdById              String?      @map("created_by") @db.Char(36)
+  updatedById              String?      @map("updated_by") @db.Char(36)
+
+  section   PmSection    @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  responses PmResponse[]
+  photos    PmPhoto[]
+
+  @@unique([sectionId, code])
+  @@index([sectionId, sortOrder])
+  @@index([analyticsKey])
+  @@map("pm_checklist_items")
+}
+
+/// A measured value recorded on each visit (e.g. Running Hours, Battery Voltage).
+model PmReadingField {
+  id           String           @id @default(uuid(7)) @db.Char(36)
+  sectionId    String           @map("section_id") @db.Char(36)
+  code         String           @db.VarChar(60)
+  label        String           @db.VarChar(200)
+  valueType    ReadingValueType @default(NUMBER) @map("value_type")
+  unit         String?          @db.VarChar(20)
+  isInteger    Boolean          @default(false) @map("is_integer")
+  minValue     Decimal?         @map("min_value") @db.Decimal(18, 6)
+  maxValue     Decimal?         @map("max_value") @db.Decimal(18, 6)
+  options      Json?
+  isRequired   Boolean          @default(false) @map("is_required")
+  helpText     String?          @map("help_text") @db.VarChar(1000)
+  analyticsKey String?          @map("analytics_key") @db.VarChar(80)
+  sortOrder    Int              @default(0) @map("sort_order") @db.SmallInt
+  isActive     Boolean          @default(true) @map("is_active")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+  createdById  String?          @map("created_by") @db.Char(36)
+  updatedById  String?          @map("updated_by") @db.Char(36)
+
+  section  PmSection   @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  readings PmReading[]
+
+  @@unique([sectionId, code])
+  @@index([sectionId, sortOrder])
+  @@index([analyticsKey])
+  @@map("pm_reading_fields")
+}
+
+/// Relationships between keyed values checked before completion
+/// (e.g. dc.dc_modules_operational <= dc.dc_modules_installed).
+model PmConsistencyRule {
+  id          String   @id @default(uuid(7)) @db.Char(36)
+  lhsKey      String   @map("lhs_key") @db.VarChar(80)
+  operator    String   @db.VarChar(2)
+  rhsKey      String   @map("rhs_key") @db.VarChar(80)
+  message     String   @db.VarChar(255)
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String?  @map("created_by") @db.Char(36)
+  updatedById String?  @map("updated_by") @db.Char(36)
+
+  @@unique([lhsKey, operator, rhsKey])
+  @@map("pm_consistency_rules")
+}
+
+/// A planned PM of a site by a technician. Recurring plans are created as one
+/// row per occurrence sharing a series id.
+model PmSchedule {
+  id            String      @id @default(uuid(7)) @db.Char(36)
+  siteId        String      @map("site_id") @db.Char(36)
+  templateId    String      @map("template_id") @db.Char(36)
+  technicianId  String?     @map("technician_id") @db.Char(36)
+  seriesId      String?     @map("series_id") @db.Char(36)
+  frequency     PmFrequency @default(MONTHLY)
+  scheduledDate DateTime    @map("scheduled_date") @db.Date
+  dueDate       DateTime    @map("due_date") @db.Date
+  status        PmStatus    @default(SCHEDULED)
+  priority      Priority    @default(MEDIUM)
+  notes         String?     @db.VarChar(1000)
+  cancelReason  String?     @map("cancel_reason") @db.VarChar(255)
+  isDemo        Boolean     @default(false) @map("is_demo")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  createdById   String?     @map("created_by") @db.Char(36)
+  updatedById   String?     @map("updated_by") @db.Char(36)
+
+  site       Site       @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  template   PmTemplate @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  technician User?      @relation("PmScheduleTechnician", fields: [technicianId], references: [id], onDelete: Restrict)
+  visits     PmVisit[]
+
+  @@index([siteId, scheduledDate])
+  @@index([technicianId, dueDate])
+  @@index([status, dueDate])
+  @@index([seriesId])
+  @@map("pm_schedules")
+}
+
+/// A PM carried out at a site, on the template version it started with.
+model PmVisit {
+  id                    String    @id @db.Char(36)
+  scheduleId            String?   @map("schedule_id") @db.Char(36)
+  siteId                String    @map("site_id") @db.Char(36)
+  templateId            String    @map("template_id") @db.Char(36)
+  technicianId          String    @map("technician_id") @db.Char(36)
+  status                PmStatus  @default(IN_PROGRESS)
+  startedAt             DateTime  @map("started_at")
+  completedAt           DateTime? @map("completed_at")
+  completionPct         Decimal   @default(0) @map("completion_pct") @db.Decimal(5, 2)
+  failureCount          Int       @default(0) @map("failure_count") @db.UnsignedSmallInt
+  /// Section codes marked not applicable (JSON array).
+  notApplicableSections Json      @map("not_applicable_sections")
+  overallComments       String?   @map("overall_comments") @db.VarChar(4000)
+  reviewedById          String?   @map("reviewed_by") @db.Char(36)
+  reviewedAt            DateTime? @map("reviewed_at")
+  reviewComments        String?   @map("review_comments") @db.VarChar(2000)
+  clientCreatedAt       DateTime? @map("client_created_at")
+  isDemo                Boolean   @default(false) @map("is_demo")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  createdById           String?   @map("created_by") @db.Char(36)
+  updatedById           String?   @map("updated_by") @db.Char(36)
+
+  schedule   PmSchedule?  @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+  site       Site         @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  template   PmTemplate   @relation(fields: [templateId], references: [id], onDelete: Restrict)
+  technician User         @relation("PmVisitTechnician", fields: [technicianId], references: [id], onDelete: Restrict)
+  reviewedBy User?        @relation("PmVisitReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+  responses  PmResponse[]
+  readings   PmReading[]
+  photos     PmPhoto[]
+
+  @@index([siteId, startedAt])
+  @@index([technicianId, startedAt])
+  @@index([status])
+  @@index([scheduleId])
+  @@map("pm_visits")
+}
+
+/// An answer to a checklist item. Prompt and unit are copied at answer time.
+model PmResponse {
+  id              String    @id @default(uuid(7)) @db.Char(36)
+  visitId         String    @map("visit_id") @db.Char(36)
+  checklistItemId String    @map("checklist_item_id") @db.Char(36)
+  answer          Answer?
+  numericValue    Decimal?  @map("numeric_value") @db.Decimal(18, 6)
+  textValue       String?   @map("text_value") @db.VarChar(2000)
+  selectedOptions Json?     @map("selected_options")
+  dateValue       DateTime? @map("date_value") @db.Date
+  datetimeValue   DateTime? @map("datetime_value")
+  comment         String?   @db.VarChar(2000)
+  isFailure       Boolean   @default(false) @map("is_failure")
+  promptSnapshot  String    @map("prompt_snapshot") @db.VarChar(500)
+  unitSnapshot    String?   @map("unit_snapshot") @db.VarChar(20)
+  answeredAt      DateTime  @map("answered_at")
+  answeredById    String?   @map("answered_by") @db.Char(36)
+  clientUpdatedAt DateTime? @map("client_updated_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  visit PmVisit         @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  item  PmChecklistItem @relation(fields: [checklistItemId], references: [id], onDelete: Restrict)
+
+  @@unique([visitId, checklistItemId])
+  @@index([checklistItemId])
+  @@index([visitId, isFailure])
+  @@map("pm_responses")
+}
+
+model PmReading {
+  id              String    @id @default(uuid(7)) @db.Char(36)
+  visitId         String    @map("visit_id") @db.Char(36)
+  readingFieldId  String    @map("reading_field_id") @db.Char(36)
+  numericValue    Decimal?  @map("numeric_value") @db.Decimal(18, 6)
+  textValue       String?   @map("text_value") @db.VarChar(500)
+  labelSnapshot   String    @map("label_snapshot") @db.VarChar(200)
+  unitSnapshot    String?   @map("unit_snapshot") @db.VarChar(20)
+  capturedAt      DateTime  @map("captured_at")
+  clientUpdatedAt DateTime? @map("client_updated_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  visit PmVisit        @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  field PmReadingField @relation(fields: [readingFieldId], references: [id], onDelete: Restrict)
+
+  @@unique([visitId, readingFieldId])
+  @@index([readingFieldId])
+  @@map("pm_readings")
+}
+
+/// A photo taken during a visit (optionally for one checklist item). The file
+/// is in storage under `storage_key`; the database never holds file contents.
+model PmPhoto {
+  id              String    @id @db.Char(36)
+  visitId         String    @map("visit_id") @db.Char(36)
+  checklistItemId String?   @map("checklist_item_id") @db.Char(36)
+  storageKey      String    @unique @map("storage_key") @db.VarChar(255)
+  contentType     String    @map("content_type") @db.VarChar(40)
+  sizeBytes       Int       @map("size_bytes") @db.UnsignedInt
+  sha256          String    @db.Char(64)
+  caption         String?   @db.VarChar(255)
+  takenAt         DateTime? @map("taken_at")
+  uploadedById    String    @map("uploaded_by") @db.Char(36)
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  visit      PmVisit          @relation(fields: [visitId], references: [id], onDelete: Restrict)
+  item       PmChecklistItem? @relation(fields: [checklistItemId], references: [id], onDelete: Restrict)
+  uploadedBy User             @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([visitId, checklistItemId])
+  @@map("pm_photos")
 }

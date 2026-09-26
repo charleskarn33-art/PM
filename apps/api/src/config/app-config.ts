@@ -32,6 +32,20 @@ export const envSchema = z
     // Shared secret the web app's server sends with the browser's IP address, so rate limits and
     // session records use the real client IP rather than the web server's. Optional.
     WEB_FORWARD_SECRET: z.preprocess((v) => (v === '' ? undefined : v), secret('WEB_FORWARD_SECRET').optional()),
+    // The organisation's time zone: decides "today" for due dates and overdue PMs.
+    ORG_TIMEZONE: z
+      .string()
+      .default('Africa/Monrovia')
+      .refine((tz) => {
+        try {
+          new Intl.DateTimeFormat('en', { timeZone: tz });
+          return true;
+        } catch {
+          return false;
+        }
+      }, 'must be an IANA time zone, e.g. Africa/Monrovia'),
+    // Largest photo accepted (bytes).
+    PHOTO_MAX_BYTES: z.coerce.number().int().min(100_000).max(25_000_000).default(10_000_000),
     STORAGE_DRIVER: z.enum(['local']).default('local'),
     STORAGE_PATH: z.string().min(1),
     STORAGE_BASE_URL: z.url(),
@@ -67,6 +81,8 @@ export class AppConfig {
   readonly jwt!: { accessSecret: string; refreshSecret: string; accessTtlSeconds: number; refreshTtlSeconds: number };
   readonly auth!: { maxFailedLogins: number; lockoutMinutes: number; rateLimitPerMinute: number; refreshReuseGraceSeconds: number };
   readonly webForwardSecret!: string | null;
+  readonly orgTimezone!: string;
+  readonly photoMaxBytes!: number;
   readonly storage!: { driver: 'local'; path: string; baseUrl: string };
   readonly logLevel!: string;
   readonly rateLimitPerMinute!: number;
@@ -105,6 +121,8 @@ export function loadConfig(source: Record<string, string | undefined>): AppConfi
       refreshReuseGraceSeconds: e.AUTH_REFRESH_REUSE_GRACE_SECONDS,
     },
     webForwardSecret: e.WEB_FORWARD_SECRET ?? null,
+    orgTimezone: e.ORG_TIMEZONE,
+    photoMaxBytes: e.PHOTO_MAX_BYTES,
     storage: { driver: e.STORAGE_DRIVER, path: e.STORAGE_PATH, baseUrl: e.STORAGE_BASE_URL.replace(/\/$/, '') },
     logLevel: e.LOG_LEVEL,
     rateLimitPerMinute: e.RATE_LIMIT_PER_MINUTE,

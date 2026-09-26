@@ -125,6 +125,29 @@ a written report, and **approval before the next phase**.
   password reset (no e-mail service configured), scheduled purge of expired
   refresh-token rows (`AuthService.purgeExpired`, run by the worker in Phase 12).
 
+**Phase 4 — PM engine.**
+- Tables: `pm_templates` (versions), `pm_sections`, `pm_checklist_items`,
+  `pm_reading_fields`, `pm_consistency_rules`, `pm_schedules`, `pm_visits`,
+  `pm_responses`, `pm_readings`, `pm_photos` (migration `pm_engine`), with
+  triggers: one active version per template, structure editable only in drafts.
+- Reference template version 1 (the Tienii report's six sections, 69
+  questions, 16 readings, 3 consistency rules) seeded as configuration; Oil
+  Pressure is a text reading because the report records it as "Okay".
+- Engine (pure functions, unit-tested): answer and reading validation for every
+  question type, failure rules, required comment / photo evidence, consistency
+  rules, completion % and failure count.
+- Template versioning (draft → active → retired), schedules with recurrence,
+  overdue marking in the organisation's time zone, visits (start, answers,
+  complete, approve / return), photos through the storage abstraction
+  (`StorageService`, local disk).
+- Demo: the Tienii PM visit (completed, 2026-09-15) with the report's readings.
+  **Its checklist answers are not in the information provided, so none are
+  seeded, and its completion % is computed from the recorded data (19.04 %),
+  not copied from the report.**
+- Not yet: GPS / geofence and signature at the visit (Phase 6), failure
+  records and corrective actions (Phase 8), power-module analytics tables
+  (Phase 5), signed photo URLs.
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).

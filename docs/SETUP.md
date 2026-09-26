@@ -46,7 +46,7 @@ names any that are missing or unsafe (values are never printed).
 pnpm install              # also generates the Prisma client
 pnpm db:status            # Prisma can reach MySQL, migrations pending?
 pnpm db:deploy            # apply the migrations (production-style, non-destructive)
-pnpm db:seed              # roles, permissions and grants (idempotent)
+pnpm db:seed              # roles, permissions, reference PM template (idempotent)
 pnpm db:seed:demo         # optional: Tienii 1301 DEMO data (refused when NODE_ENV=production)
 pnpm db:create-admin --email you@example.com --name "Your Name"   # first Super Admin
 pnpm dev:api              # http://localhost:3001/api/v1/health
