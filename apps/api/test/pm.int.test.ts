@@ -444,6 +444,12 @@ describe('demo data', () => {
       'Number of Battery Strings': 8,
     });
     expect(visit.responses).toHaveLength(0);
+    // Power-module records: measured values as recorded, DC kW calculated (52.99 V × 52.7 A / 1000).
+    const dc = await prisma.dcReading.findUniqueOrThrow({ where: { visitId: visit.id } });
+    expect([dc.dcPowerKw!.toString(), dc.rectifierModuleCount, dc.dcModulesInstalled, dc.dcModulesOperational]).toEqual(['2.792573', 6, 3, 3]);
+    const gen = await prisma.generatorReading.findUniqueOrThrow({ where: { visitId: visit.id } });
+    expect([Number(gen.runningHours), gen.oilPressure, Number(gen.fuelLevelPct), Number(gen.generatorKva)]).toEqual([877, 'Okay', 12.7, 20]);
+    expect(await prisma.solarReading.count({ where: { visitId: visit.id } })).toBe(0);
     expect(Number(visit.completionPct)).toBeLessThan(100);
     expect((await seedDemoData(prisma)).visitId).toBe(demo.visitId); // idempotent
     const removed = await removeDemoData(prisma);

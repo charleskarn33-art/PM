@@ -79,3 +79,19 @@ export const PhotoFields = z.strictObject({
   caption: z.string().trim().max(255).optional(),
   takenAt: at.optional(),
 });
+
+export const BatteryUnitsInput = z.strictObject({
+  units: z
+    .array(
+      z.strictObject({
+        unitNumber: z.number().int().min(1).max(1000),
+        /** null clears the unit's reading. */
+        voltageV: number.nullish(),
+        comment: z.string().trim().max(500).nullish(),
+        clientUpdatedAt: at.optional(),
+      }),
+    )
+    .min(1)
+    .max(1000)
+    .refine((u) => new Set(u.map((x) => x.unitNumber)).size === u.length, 'each battery once'),
+});

@@ -8,6 +8,10 @@
  * failure needs a comment and a photo. Every failure is MEDIUM severity until
  * an administrator sets real severities. No engineering limits: only
  * definitional bounds (percent 0–100, counts and measurements ≥ 0).
+ *
+ * Analytics keys feed the power-module records (generator, DC, battery,
+ * solar, non-technical, earthing). DC clamp-meter phases are keyed
+ * `dc.phase_current.<phase number>`.
  */
 import type { PmCategory, PrismaClient, ReadingValueType, ResponseType, SiteEquipment } from '../generated/prisma/client.js';
 
@@ -121,13 +125,13 @@ export const REFERENCE_ITEMS: Record<string, ItemDef[]> = {
     { code: "dc_cables_condition", prompt: "DC cables in good condition", failureOnAnswer: "NO" },
     { code: "dc_alarms_tested", prompt: "Alarms tested and functional", failureOnAnswer: "NO" },
     { code: "dc_grounding_secure", prompt: "Grounding connections secure", failureOnAnswer: "NO" },
-    { code: "dc_phase_1_amps", prompt: "Clamp Meter Amp Load - Phase 1", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current" },
-    { code: "dc_phase_2_amps", prompt: "Clamp Meter Amp Load - Phase 2", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current" },
-    { code: "dc_phase_3_amps", prompt: "Clamp Meter Amp Load - Phase 3", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current" },
-    { code: "dc_phase_4_amps", prompt: "Clamp Meter Amp Load - Phase 4", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current" },
-    { code: "dc_phase_5_amps", prompt: "Clamp Meter Amp Load - Phase 5", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current" },
-    { code: "dc_phase_6_amps", prompt: "Clamp Meter Amp Load - Phase 6", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current" },
-    { code: "dc_phase_7_amps", prompt: "Clamp Meter Amp Load - Phase 7", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current" },
+    { code: "dc_phase_1_amps", prompt: "Clamp Meter Amp Load - Phase 1", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current.1" },
+    { code: "dc_phase_2_amps", prompt: "Clamp Meter Amp Load - Phase 2", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current.2" },
+    { code: "dc_phase_3_amps", prompt: "Clamp Meter Amp Load - Phase 3", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current.3" },
+    { code: "dc_phase_4_amps", prompt: "Clamp Meter Amp Load - Phase 4", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current.4" },
+    { code: "dc_phase_5_amps", prompt: "Clamp Meter Amp Load - Phase 5", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current.5" },
+    { code: "dc_phase_6_amps", prompt: "Clamp Meter Amp Load - Phase 6", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current.6" },
+    { code: "dc_phase_7_amps", prompt: "Clamp Meter Amp Load - Phase 7", responseType: "NUMBER", unit: "A", minValue: 0, isRequired: false, helpText: "Leave blank if this phase is not present on site.", analyticsKey: "dc.phase_current.7" },
     { code: "dc_rectifier_alarm", prompt: "Is there any rectifier alarm or fault?", failureOnAnswer: "YES" },
     { code: "dc_rectifier_clean", prompt: "Is the rectifier clean and free from excessive dust?", failureOnAnswer: "NO" },
     { code: "dc_abnormal_findings", prompt: "Are there any abnormal technical findings?", failureOnAnswer: "YES" },
@@ -157,19 +161,19 @@ export const REFERENCE_ITEMS: Record<string, ItemDef[]> = {
     { code: "sol_abnormal_findings", prompt: "Are there any abnormal solar-system findings?", failureOnAnswer: "YES" },
   ],
   NON_TECHNICAL: [
-    { code: "nt_power_equipment_cleaned", prompt: "Was all power equipment cleaned?" },
-    { code: "nt_dust_removed", prompt: "Was excessive dust removed from the equipment?" },
-    { code: "nt_shelter_cleaned", prompt: "Shelter / cabinet cleaned" },
-    { code: "nt_vegetation_clear", prompt: "Site clear of vegetation", failureOnAnswer: "NO" },
-    { code: "nt_no_debris", prompt: "No debris or waste on site", failureOnAnswer: "NO" },
-    { code: "nt_cable_trays", prompt: "Cable trays clean and organized", failureOnAnswer: "NO" },
-    { code: "nt_fence_gate", prompt: "Fence and gate in good condition", failureOnAnswer: "NO" },
-    { code: "nt_missing_stolen", prompt: "Is any equipment or cable missing/stolen?", failureOnAnswer: "YES" },
-    { code: "nt_security_lights", prompt: "Are security lights working?", failureOnAnswer: "NO" },
-    { code: "nt_aviation_lights", prompt: "Are navigation/aviation lights working where applicable?", failureOnAnswer: "NO", helpText: "Select N/A if the site has no navigation/aviation lights." },
-    { code: "nt_locks_secure", prompt: "Are locks and access points secure?", failureOnAnswer: "NO" },
-    { code: "nt_oil_fuel_spill", prompt: "Is there any oil/fuel spill?", failureOnAnswer: "YES" },
-    { code: "nt_fire_extinguisher", prompt: "Is there Fire Extinguisher on Site?", failureOnAnswer: "NO", photoOnAnswers: ["YES"], photoInstructions: "Photo must clearly show the fire extinguisher expiry date." },
+    { code: "nt_power_equipment_cleaned", prompt: "Was all power equipment cleaned?", analyticsKey: "non_technical.power_equipment_cleaned" },
+    { code: "nt_dust_removed", prompt: "Was excessive dust removed from the equipment?", analyticsKey: "non_technical.dust_removed" },
+    { code: "nt_shelter_cleaned", prompt: "Shelter / cabinet cleaned", analyticsKey: "non_technical.shelter_cleaned" },
+    { code: "nt_vegetation_clear", prompt: "Site clear of vegetation", failureOnAnswer: "NO", analyticsKey: "non_technical.vegetation_clear" },
+    { code: "nt_no_debris", prompt: "No debris or waste on site", failureOnAnswer: "NO", analyticsKey: "non_technical.free_of_debris" },
+    { code: "nt_cable_trays", prompt: "Cable trays clean and organized", failureOnAnswer: "NO", analyticsKey: "non_technical.cable_trays_organised" },
+    { code: "nt_fence_gate", prompt: "Fence and gate in good condition", failureOnAnswer: "NO", analyticsKey: "non_technical.fence_gate_good" },
+    { code: "nt_missing_stolen", prompt: "Is any equipment or cable missing/stolen?", failureOnAnswer: "YES", analyticsKey: "non_technical.equipment_missing" },
+    { code: "nt_security_lights", prompt: "Are security lights working?", failureOnAnswer: "NO", analyticsKey: "non_technical.security_lights_working" },
+    { code: "nt_aviation_lights", prompt: "Are navigation/aviation lights working where applicable?", failureOnAnswer: "NO", helpText: "Select N/A if the site has no navigation/aviation lights.", analyticsKey: "non_technical.aviation_lights_working" },
+    { code: "nt_locks_secure", prompt: "Are locks and access points secure?", failureOnAnswer: "NO", analyticsKey: "non_technical.locks_secure" },
+    { code: "nt_oil_fuel_spill", prompt: "Is there any oil/fuel spill?", failureOnAnswer: "YES", analyticsKey: "non_technical.oil_fuel_spill" },
+    { code: "nt_fire_extinguisher", prompt: "Is there Fire Extinguisher on Site?", failureOnAnswer: "NO", photoOnAnswers: ["YES"], photoInstructions: "Photo must clearly show the fire extinguisher expiry date.", analyticsKey: "non_technical.fire_extinguisher_present" },
   ],
   EARTHING: [
     { code: "earth_inspected", prompt: "Was the site earthing system inspected?", commentOnAnswers: ["NO"], analyticsKey: "earthing.inspected" },

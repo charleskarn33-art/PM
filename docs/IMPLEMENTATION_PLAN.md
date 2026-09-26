@@ -148,6 +148,26 @@ a written report, and **approval before the next phase**.
   records and corrective actions (Phase 8), power-module analytics tables
   (Phase 5), signed photo URLs.
 
+**Phase 5 — Power modules.**
+- Tables `generator_readings`, `dc_readings`, `dc_phase_currents`,
+  `battery_readings`, `battery_unit_readings`, `solar_readings`,
+  `non_technical_observations`, `earthing_readings` (migration
+  `power_modules`); `sites.battery_unit_count`.
+- One record per visit and section, rebuilt from the visit's answers and
+  readings whenever they change (through the template's analytics keys);
+  none for a section marked not applicable (solar at sites without solar).
+- DC: phases 1–7 stored as the recorded amp values; DC kW (V × A / 1000) and
+  total phase current calculated with exact decimals into their own columns.
+- Battery: each battery's voltage at sites with a configured battery count —
+  required before completion — with the min / max per visit.
+- Validation ranges come only from the template (administrator-configured);
+  none are added by the modules.
+- Reference template seed: DC phases keyed per phase and non-technical
+  questions keyed (the seed of an already-seeded database is not changed;
+  local databases seeded during Phase 4 need their PM data re-seeded).
+- Site power history endpoint per module.
+- Not yet: charts and analytics thresholds (Phase 10).
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).

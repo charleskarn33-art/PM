@@ -72,7 +72,7 @@ Access tokens last `JWT_ACCESS_TTL` (15 min), refresh tokens `JWT_REFRESH_TTL`
 | POST / PATCH | `/counties`, `/counties/:id` | `org.manage` |
 | GET | `/sites?q&regionId&clusterId&countyId&status` | `sites.read` (scoped) |
 | GET | `/sites/:id` | `sites.read` (scoped) |
-| POST / PATCH | `/sites`, `/sites/:id` | `sites.manage` |
+| POST / PATCH | `/sites`, `/sites/:id` | `sites.manage` — includes `batteryUnitCount` (batteries in the bank; each PM then records every battery) |
 
 ## Site assignments
 
@@ -133,9 +133,26 @@ OVERDUE at start-up and hourly.
 | GET | `/visits/:id/photos/:photoId` | `pm_visits.read` (scoped) — the image |
 | DELETE | `/visits/:id/photos/:photoId` | `pm_visits.perform`, own editable visit |
 
+| PUT | `/visits/:id/battery-units` | `pm_visits.perform`, own visit — `{ units: [{ unitNumber, voltageV \| null, comment?, clientUpdatedAt? }] }`; only at sites with `batteryUnitCount`; every battery is then required before completion |
+
+The visit detail includes `modules` — the power-module records built from its
+answers and readings (null for a section not applicable): `generator`, `dc`
+(with `phases`, calculated `dcPowerKw` and `totalPhaseCurrentA`), `battery`
+(with `units` and their min / max), `solar`, `nonTechnical`, `earthing`.
+
 Visit flow: IN_PROGRESS → COMPLETED → APPROVED, or REJECTED → (technician
 edits) IN_PROGRESS → COMPLETED. Completion % counts required answers and
 readings in applicable sections (rounded down, so 100 % means complete).
+
+## Site power history
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/sites/:id/power/:module?from&to&status&limit` | `pm_visits.read` (scoped) — `module`: `generator`, `dc`, `battery`, `solar`, `non-technical`, `earthing`; one record per PM visit, newest first, at most 200 |
+
+Measured values are as recorded. Calculated values have their own fields:
+`dcPowerKw` = rectifier voltage × load current / 1000 (exact decimals, 6
+places), `totalPhaseCurrentA` = sum of the recorded clamp-meter phases.
 
 ## Health
 

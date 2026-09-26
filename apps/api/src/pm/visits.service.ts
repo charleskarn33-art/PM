@@ -21,9 +21,9 @@ import {
   type ResponseValues,
 } from './engine.js';
 import { sniffImage } from './image-type.js';
-import { fieldView, itemView, num, stringList, toEngineField, toEngineItem } from './mapping.js';
-import { loadStructure, loadVisitState, refreshProgress } from './visit-state.js';
-import { AnswersInput, PhotoFields, ReviewInput, StartVisitInput, VisitListQuery } from './visits.schemas.js';
+import { fieldView, itemView, moduleView, num, stringList, toEngineField, toEngineItem } from './mapping.js';
+import { batteryUnitRequirement, loadStructure, loadVisitState, refreshProgress } from './visit-state.js';
+import { AnswersInput, BatteryUnitsInput, PhotoFields, ReviewInput, StartVisitInput, VisitListQuery } from './visits.schemas.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -364,9 +364,18 @@ export class VisitsService {
         ...LIST_INCLUDE,
         schedule: { select: { id: true, scheduledDate: true, dueDate: true, priority: true } },
         reviewedBy: { select: { id: true, fullName: true } },
+        generator: true,
+        dc: true,
+        dcPhases: { orderBy: { phaseNumber: 'asc' } },
+        battery: true,
+        batteryUnits: { orderBy: { unitNumber: 'asc' } },
+        solar: true,
+        nonTechnical: true,
+        earthing: true,
       },
     });
     if (!visit) throw notFound('Visit');
+    const { generator, dc, dcPhases, battery, batteryUnits, solar, nonTechnical, earthing, ...visitRow } = visit;
     const [structure, responses, readings, photos, state] = await Promise.all([
       loadStructure(this.prisma, visit.templateId),
       this.prisma.pmResponse.findMany({ where: { visitId } }),
@@ -376,7 +385,7 @@ export class VisitsService {
     ]);
     const progress = visitProgress(state);
     return {
-      ...visit,
+      ...visitRow,
       completionPct: num(visit.completionPct),
       notApplicableSections: stringList(visit.notApplicableSections),
       schedule: visit.schedule ? { ...visit.schedule, scheduledDate: toIso(visit.schedule.scheduledDate), dueDate: toIso(visit.schedule.dueDate) } : null,
@@ -395,9 +404,57 @@ export class VisitsService {
       })),
       readings: readings.map((r) => ({ ...r, numericValue: num(r.numericValue) })),
       photos,
+      /** Power-module records built from this visit's data (null: section not applicable). */
+      modules: moduleView({ generator, dc, dcPhases, battery, batteryUnits, solar, nonTechnical, earthing }),
       progress,
       issues: EDITABLE.includes(visit.status) ? visitIssues(state) : [],
     };
+  }
+
+  // --- Battery units --------------------------------------------------------------------
+
+  /**
+   * Records each battery's voltage at a site whose battery count is
+   * configured. A unit without a voltage clears it; an edit older than the
+   * stored one (clientUpdatedAt) is skipped. No limits beyond storage bounds:
+   * none are configured for individual batteries.
+   */
+  async saveBatteryUnits(visitId: string, input: unknown, caller: AuthUser) {
+    const data = parseInput(BatteryUnitsInput, input);
+    const skipped = await this.prisma
+      .$transaction(async (tx) => {
+        const visit = await this.requireOwnEditable(tx, visitId, caller);
+        const requirement = await batteryUnitRequirement(tx, visit);
+        if (!requirement) throw invalid('BATTERY_UNITS_NOT_CONFIGURED', 'This site has no battery count configured, so batteries are not recorded one by one.');
+        if (stringList(visit.notApplicableSections).includes(requirement.sectionCode)) {
+          throw invalid('SECTION_NOT_APPLICABLE', 'The battery section is marked not applicable for this visit.');
+        }
+        const problems = data.units.flatMap((u, i) =>
+          u.unitNumber > requirement.count ? [{ path: `units.${i}.unitNumber`, message: `this site has ${requirement.count} batteries` }] : [],
+        );
+        if (problems.length) throw invalid('VALIDATION_FAILED', 'Some values are not valid. Nothing was saved.', problems);
+        const skipped: number[] = [];
+        for (const u of data.units) {
+          const key = { visitId_unitNumber: { visitId, unitNumber: u.unitNumber } };
+          const stored = await tx.batteryUnitReading.findUnique({ where: key });
+          const at = u.clientUpdatedAt ? new Date(u.clientUpdatedAt) : null;
+          if (stored?.clientUpdatedAt && at && at < stored.clientUpdatedAt) {
+            skipped.push(u.unitNumber);
+            continue;
+          }
+          if (u.voltageV == null) {
+            if (stored) await tx.batteryUnitReading.delete({ where: key });
+            continue;
+          }
+          const values = { voltageV: u.voltageV, comment: u.comment ?? null, recordedAt: new Date(), clientUpdatedAt: at };
+          await tx.batteryUnitReading.upsert({ where: key, create: { visitId, unitNumber: u.unitNumber, siteId: visit.siteId, ...values }, update: values });
+        }
+        await tx.pmVisit.update({ where: { id: visitId }, data: { updatedById: caller.id } });
+        await this.refreshProgress(tx, visit);
+        return skipped;
+      })
+      .catch(rethrowDbError);
+    return { ...(await this.get(visitId, caller)), skippedBatteryUnits: skipped };
   }
 
   // --- Photos ----------------------------------------------------------------------------
@@ -494,7 +551,7 @@ export class VisitsService {
     return visit;
   }
 
-  private refreshProgress(tx: Tx, visit: Pick<PmVisit, 'id' | 'templateId' | 'notApplicableSections'>) {
+  private refreshProgress(tx: Tx, visit: PmVisit) {
     return refreshProgress(tx, visit);
   }
 }

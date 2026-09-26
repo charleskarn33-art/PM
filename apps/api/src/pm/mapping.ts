@@ -72,3 +72,30 @@ export const itemView = (i: PmChecklistItem) => ({
 export const fieldView = (f: PmReadingField) => ({ ...f, options: strings(f.options), minValue: num(f.minValue), maxValue: num(f.maxValue) });
 
 export const stringList = strings;
+
+/** Decimal columns of a record → numbers (for the API). */
+function numbers<T extends Record<string, unknown>>(row: T | null) {
+  if (!row) return null;
+  return Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v != null && typeof v === 'object' && 'toFixed' in v && !(v instanceof Date) ? Number(v) : v]));
+}
+
+/** The power-module records of a visit, as returned by the API. */
+export function moduleView(m: {
+  generator: Record<string, unknown> | null;
+  dc: Record<string, unknown> | null;
+  dcPhases: Record<string, unknown>[];
+  battery: Record<string, unknown> | null;
+  batteryUnits: Record<string, unknown>[];
+  solar: Record<string, unknown> | null;
+  nonTechnical: Record<string, unknown> | null;
+  earthing: Record<string, unknown> | null;
+}) {
+  return {
+    generator: numbers(m.generator),
+    dc: m.dc ? { ...numbers(m.dc), phases: m.dcPhases.map((p) => numbers(p)) } : null,
+    battery: m.battery ? { ...numbers(m.battery), units: m.batteryUnits.map((u) => numbers(u)) } : null,
+    solar: numbers(m.solar),
+    nonTechnical: numbers(m.nonTechnical),
+    earthing: numbers(m.earthing),
+  };
+}

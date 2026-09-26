@@ -297,6 +297,8 @@ model Site {
   gridAvailable        Boolean    @default(false) @map("grid_available")
   batteryConfiguration String?    @map("battery_configuration") @db.VarChar(500)
   powerConfiguration   String?    @map("power_configuration") @db.VarChar(500)
+  /// Number of batteries in the bank. When set, a PM records each battery's voltage.
+  batteryUnitCount     Int?       @map("battery_unit_count") @db.UnsignedSmallInt
   isDemo               Boolean    @default(false) @map("is_demo")
   createdAt            DateTime   @default(now()) @map("created_at")
   updatedAt            DateTime   @updatedAt @map("updated_at")
@@ -312,6 +314,15 @@ model Site {
   assignments SiteAssignment[]
   pmSchedules PmSchedule[]
   pmVisits    PmVisit[]
+
+  generatorReadings GeneratorReading[]
+  dcReadings        DcReading[]
+  dcPhaseCurrents   DcPhaseCurrent[]
+  batteryReadings   BatteryReading[]
+  batteryUnits      BatteryUnitReading[]
+  solarReadings     SolarReading[]
+  nonTechnical      NonTechnicalObservation[]
+  earthingReadings  EarthingReading[]
 
   @@index([siteName])
   @@index([regionId])
@@ -668,6 +679,15 @@ model PmVisit {
   readings   PmReading[]
   photos     PmPhoto[]
 
+  generator    GeneratorReading?
+  dc           DcReading?
+  dcPhases     DcPhaseCurrent[]
+  battery      BatteryReading?
+  batteryUnits BatteryUnitReading[]
+  solar        SolarReading?
+  nonTechnical NonTechnicalObservation?
+  earthing     EarthingReading?
+
   @@index([siteId, startedAt])
   @@index([technicianId, startedAt])
   @@index([status])
@@ -747,4 +767,181 @@ model PmPhoto {
 
   @@index([visitId, checklistItemId])
   @@map("pm_photos")
+}
+
+// -----------------------------------------------------------------------------
+// Power modules: one record per visit and section, kept in step with the
+// visit's answers and readings (through the template's analytics keys), for
+// history and analytics. Measured values are copied unchanged; calculated
+// values (DC kW, total phase current) have their own columns. A section
+// marked not applicable has no record.
+// -----------------------------------------------------------------------------
+
+model GeneratorReading {
+  visitId           String   @id @map("visit_id") @db.Char(36)
+  siteId            String   @map("site_id") @db.Char(36)
+  recordedAt        DateTime @map("recorded_at")
+  runningHours      Decimal? @map("running_hours") @db.Decimal(18, 6)
+  /// As recorded (the gauge value or its status, e.g. "Okay").
+  oilPressure       String?  @map("oil_pressure") @db.VarChar(500)
+  oilPressureBar    Decimal? @map("oil_pressure_bar") @db.Decimal(18, 6)
+  fuelLevelPct      Decimal? @map("fuel_level_pct") @db.Decimal(18, 6)
+  generatorKva      Decimal? @map("generator_kva") @db.Decimal(18, 6)
+  engineOilChanged  Boolean? @map("engine_oil_changed")
+  fuelFilterChanged Boolean? @map("fuel_filter_changed")
+  oilFilterChanged  Boolean? @map("oil_filter_changed")
+  requiresService   Boolean? @map("requires_service")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, recordedAt])
+  @@map("generator_readings")
+}
+
+model DcReading {
+  visitId              String   @id @map("visit_id") @db.Char(36)
+  siteId               String   @map("site_id") @db.Char(36)
+  recordedAt           DateTime @map("recorded_at")
+  rectifierVoltageV    Decimal? @map("rectifier_voltage_v") @db.Decimal(18, 6)
+  loadCurrentA         Decimal? @map("load_current_a") @db.Decimal(18, 6)
+  rectifierModuleCount Int?     @map("rectifier_module_count")
+  dcModulesInstalled   Int?     @map("dc_modules_installed")
+  dcModulesOperational Int?     @map("dc_modules_operational")
+  controllerModel      String?  @map("controller_model") @db.VarChar(500)
+  /// Calculated: rectifier voltage × load current / 1000 (exact decimal arithmetic).
+  dcPowerKw            Decimal? @map("dc_power_kw") @db.Decimal(18, 6)
+  /// Calculated: sum of the recorded clamp-meter phase currents.
+  totalPhaseCurrentA   Decimal? @map("total_phase_current_a") @db.Decimal(18, 6)
+  phasesRecorded       Int      @default(0) @map("phases_recorded") @db.UnsignedTinyInt
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, recordedAt])
+  @@map("dc_readings")
+}
+
+/// Clamp-meter amp load per phase (phases 1–7 in the reference template).
+model DcPhaseCurrent {
+  visitId     String   @map("visit_id") @db.Char(36)
+  phaseNumber Int      @map("phase_number") @db.UnsignedTinyInt
+  siteId      String   @map("site_id") @db.Char(36)
+  recordedAt  DateTime @map("recorded_at")
+  ampValue    Decimal  @map("amp_value") @db.Decimal(18, 6)
+  comment     String?  @db.VarChar(2000)
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@id([visitId, phaseNumber])
+  @@index([siteId, recordedAt])
+  @@map("dc_phase_currents")
+}
+
+model BatteryReading {
+  visitId             String   @id @map("visit_id") @db.Char(36)
+  siteId              String   @map("site_id") @db.Char(36)
+  recordedAt          DateTime @map("recorded_at")
+  batteryVoltageV     Decimal? @map("battery_voltage_v") @db.Decimal(18, 6)
+  capacityAh          Decimal? @map("capacity_ah") @db.Decimal(18, 6)
+  stringCount         Int?     @map("string_count")
+  physicalDamageFound Boolean? @map("physical_damage_found")
+  waterTopUpRequired  Boolean? @map("water_top_up_required")
+  /// Calculated from the per-battery readings, when recorded.
+  unitsRecorded       Int      @default(0) @map("units_recorded") @db.UnsignedSmallInt
+  minUnitVoltageV     Decimal? @map("min_unit_voltage_v") @db.Decimal(18, 6)
+  maxUnitVoltageV     Decimal? @map("max_unit_voltage_v") @db.Decimal(18, 6)
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, recordedAt])
+  @@map("battery_readings")
+}
+
+/// The voltage of each battery in the bank, at sites where the battery count is configured.
+model BatteryUnitReading {
+  visitId         String    @map("visit_id") @db.Char(36)
+  unitNumber      Int       @map("unit_number") @db.UnsignedSmallInt
+  siteId          String    @map("site_id") @db.Char(36)
+  voltageV        Decimal   @map("voltage_v") @db.Decimal(18, 6)
+  comment         String?   @db.VarChar(500)
+  recordedAt      DateTime  @map("recorded_at")
+  clientUpdatedAt DateTime? @map("client_updated_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@id([visitId, unitNumber])
+  @@index([siteId, recordedAt])
+  @@map("battery_unit_readings")
+}
+
+model SolarReading {
+  visitId                 String   @id @map("visit_id") @db.Char(36)
+  siteId                  String   @map("site_id") @db.Char(36)
+  recordedAt              DateTime @map("recorded_at")
+  panelsInstalled         Int?     @map("panels_installed")
+  panelsOperational       Int?     @map("panels_operational")
+  damagedPanelCount       Int?     @map("damaged_panel_count")
+  chargeControllerOutputV Decimal? @map("charge_controller_output_v") @db.Decimal(18, 6)
+  panelsCleaned           Boolean? @map("panels_cleaned")
+  systemOperatingNormally Boolean? @map("system_operating_normally")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, recordedAt])
+  @@map("solar_readings")
+}
+
+model NonTechnicalObservation {
+  visitId                 String   @id @map("visit_id") @db.Char(36)
+  siteId                  String   @map("site_id") @db.Char(36)
+  recordedAt              DateTime @map("recorded_at")
+  powerEquipmentCleaned   Boolean? @map("power_equipment_cleaned")
+  dustRemoved             Boolean? @map("dust_removed")
+  shelterCleaned          Boolean? @map("shelter_cleaned")
+  vegetationClear         Boolean? @map("vegetation_clear")
+  freeOfDebris            Boolean? @map("free_of_debris")
+  cableTraysOrganised     Boolean? @map("cable_trays_organised")
+  fenceGateGood           Boolean? @map("fence_gate_good")
+  equipmentMissing        Boolean? @map("equipment_missing")
+  securityLightsWorking   Boolean? @map("security_lights_working")
+  aviationLightsWorking   Boolean? @map("aviation_lights_working")
+  locksSecure             Boolean? @map("locks_secure")
+  oilFuelSpill            Boolean? @map("oil_fuel_spill")
+  fireExtinguisherPresent Boolean? @map("fire_extinguisher_present")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, recordedAt])
+  @@map("non_technical_observations")
+}
+
+model EarthingReading {
+  visitId                String   @id @map("visit_id") @db.Char(36)
+  siteId                 String   @map("site_id") @db.Char(36)
+  recordedAt             DateTime @map("recorded_at")
+  inspected              Boolean?
+  earthCableConnected    Boolean? @map("earth_cable_connected")
+  freeFromCorrosion      Boolean? @map("free_from_corrosion")
+  pitConditionAcceptable Boolean? @map("pit_condition_acceptable")
+  abnormalitiesFound     Boolean? @map("abnormalities_found")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  visit PmVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  site  Site    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+
+  @@index([siteId, recordedAt])
+  @@map("earthing_readings")
 }

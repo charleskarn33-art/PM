@@ -6,6 +6,7 @@ import { RequirePermissions } from '../authz/decorators.js';
 import { requireGlobal } from '../authz/require-global.js';
 import { IdPipe } from '../common/id.pipe.js';
 import { paged } from '../common/paged.js';
+import { PowerHistoryService } from './power-history.service.js';
 import { SchedulesService } from './schedules.service.js';
 import { TemplatesService } from './templates.service.js';
 import { VisitsService, type UploadedFile as Upload } from './visits.service.js';
@@ -231,6 +232,13 @@ export class VisitsController {
     return this.visits.review(id, body, me);
   }
 
+  /** Each battery's voltage, at sites with a configured battery count. */
+  @RequirePermissions('pm_visits.perform')
+  @Put(':id/battery-units')
+  saveBatteryUnits(@Param('id', IdPipe) id: string, @Body() body: unknown, @CurrentUser() me: AuthUser) {
+    return this.visits.saveBatteryUnits(id, body, me);
+  }
+
   /** multipart/form-data: `file` (JPEG, PNG or WebP) and optional `id`, `checklistItemId`, `caption`, `takenAt`. */
   @RequirePermissions('pm_visits.perform')
   @Post(':id/photos')
@@ -252,5 +260,17 @@ export class VisitsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async deletePhoto(@Param('id', IdPipe) id: string, @Param('photoId', IdPipe) photoId: string, @CurrentUser() me: AuthUser): Promise<void> {
     await this.visits.deletePhoto(id, photoId, me);
+  }
+}
+
+/** Power-module history of a site (newest first), for trends and analytics. */
+@Controller('sites')
+export class SitePowerController {
+  constructor(private readonly power: PowerHistoryService) {}
+
+  @RequirePermissions('pm_visits.read')
+  @Get(':id/power/:module')
+  history(@Param('id', IdPipe) id: string, @Param('module') module: string, @Query() query: unknown, @CurrentUser() me: AuthUser) {
+    return this.power.history(id, module, query, me);
   }
 }

@@ -205,6 +205,19 @@ describe('visit issues and progress', () => {
     expect(visitProgress(state({ items: almost, fields: [], responses: r })).completionPct).toBe(99.99);
   });
 
+  it('extra required values (battery units) count and block like readings of their section', () => {
+    const extraRequired = [
+      { sectionCode: 'DC_SYSTEM', refId: '1', label: 'Battery 1 voltage', done: true },
+      { sectionCode: 'DC_SYSTEM', refId: '2', label: 'Battery 2 voltage', done: false },
+    ];
+    const s = state({ extraRequired, items: [], fields: [] });
+    expect(visitIssues(s)).toEqual([{ sectionCode: 'DC_SYSTEM', kind: 'REQUIRED', refType: 'battery_unit', refId: '2', label: 'Battery 2 voltage' }]);
+    expect(visitProgress(s).completionPct).toBe(50);
+    const na = state({ extraRequired, items: [], fields: [], sections: [{ ...sections[1]!, allowNotApplicable: true }], notApplicableSections: ['DC_SYSTEM'] });
+    expect(visitIssues(na)).toEqual([]);
+    expect(visitProgress(na).completionPct).toBe(100);
+  });
+
   it('consistency rules compare keyed values', () => {
     const s = state({
       readings: new Map([

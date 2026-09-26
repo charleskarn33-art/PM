@@ -37,6 +37,8 @@ const siteFields = {
   gridAvailable: z.boolean().optional(),
   batteryConfiguration: optionalText(500),
   powerConfiguration: optionalText(500),
+  /** Number of batteries in the bank; when set, each PM records every battery's voltage. */
+  batteryUnitCount: z.number().int().min(1).max(1000).nullish(),
 };
 
 const coordinatesTogether = (v: { latitude?: number | null; longitude?: number | null }) =>

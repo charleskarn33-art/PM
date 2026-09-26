@@ -241,6 +241,12 @@ export interface VisitState {
   /** Photos attached per checklist item id. */
   photoCounts: ReadonlyMap<string, number>;
   notApplicableSections: readonly string[];
+  /**
+   * Required values outside the template, e.g. each battery's voltage at a
+   * site with a configured battery count. Counted like required readings of
+   * their section (ignored when the section is not applicable).
+   */
+  extraRequired?: readonly { sectionCode: string; refId: string; label: string; done: boolean }[];
 }
 
 export type IssueKind = 'REQUIRED' | 'COMMENT_REQUIRED' | 'PHOTO_REQUIRED' | 'INCONSISTENT';
@@ -248,7 +254,7 @@ export type IssueKind = 'REQUIRED' | 'COMMENT_REQUIRED' | 'PHOTO_REQUIRED' | 'IN
 export interface VisitIssue {
   sectionCode: string;
   kind: IssueKind;
-  refType: 'item' | 'reading' | 'rule';
+  refType: 'item' | 'reading' | 'rule' | 'battery_unit';
   refId: string;
   label: string;
 }
@@ -279,6 +285,10 @@ export function visitIssues(state: VisitState): VisitIssue[] {
     if (f.isRequired && !readingHasValue(f, state.readings.get(f.id))) {
       issues.push({ sectionCode: code.get(f.sectionId)!, kind: 'REQUIRED', refType: 'reading', refId: f.id, label: f.label });
     }
+  }
+  const applicableCodes = new Set(code.values());
+  for (const x of state.extraRequired ?? []) {
+    if (applicableCodes.has(x.sectionCode) && !x.done) issues.push({ sectionCode: x.sectionCode, kind: 'REQUIRED', refType: 'battery_unit', refId: x.refId, label: x.label });
   }
   return [...issues, ...consistencyIssues(state)];
 }
@@ -357,6 +367,12 @@ export function visitProgress(state: VisitState): VisitProgress {
     const p = bySection.get(f.sectionId)!;
     p.required += 1;
     if (readingHasValue(f, state.readings.get(f.id))) p.done += 1;
+  }
+  for (const x of state.extraRequired ?? []) {
+    const p = [...bySection.values()].find((s) => s.code === x.sectionCode);
+    if (!p || p.notApplicable) continue;
+    p.required += 1;
+    if (x.done) p.done += 1;
   }
   const sections = [...bySection.values()];
   const required = sections.reduce((n, s) => n + s.required, 0);
