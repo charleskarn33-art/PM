@@ -232,6 +232,22 @@ export class VisitsController {
     return this.visits.review(id, body, me);
   }
 
+  /** `{ name?, width, height, strokes: [[x, y], …][] }` — the server draws the signature image. */
+  @RequirePermissions('pm_visits.perform')
+  @Put(':id/signature')
+  sign(@Param('id', IdPipe) id: string, @Body() body: unknown, @CurrentUser() me: AuthUser) {
+    return this.visits.sign(id, body, me);
+  }
+
+  @RequirePermissions('pm_visits.read')
+  @Get(':id/signature')
+  async signature(@Param('id', IdPipe) id: string, @CurrentUser() me: AuthUser, @Res({ passthrough: true }) res: Response) {
+    const data = await this.visits.signatureFile(id, me);
+    res.setHeader('Cache-Control', 'private, no-cache');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    return new StreamableFile(data, { type: 'image/svg+xml', length: data.length });
+  }
+
   /** Each battery's voltage, at sites with a configured battery count. */
   @RequirePermissions('pm_visits.perform')
   @Put(':id/battery-units')

@@ -20,6 +20,7 @@ import { HealthModule } from './health/health.module.js';
 import { OrganisationModule } from './organisation/organisation.module.js';
 import { PmModule } from './pm/pm.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
+import { SettingsModule } from './settings/settings.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { UsersModule } from './users/users.module.js';
 
@@ -58,6 +59,7 @@ export class AppModule {
         }),
         PrismaModule,
         StorageModule,
+        SettingsModule,
         AuthModule,
         AuthzModule,
         HealthModule,

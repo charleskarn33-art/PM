@@ -249,12 +249,12 @@ export interface VisitState {
   extraRequired?: readonly { sectionCode: string; refId: string; label: string; done: boolean }[];
 }
 
-export type IssueKind = 'REQUIRED' | 'COMMENT_REQUIRED' | 'PHOTO_REQUIRED' | 'INCONSISTENT';
+export type IssueKind = 'REQUIRED' | 'COMMENT_REQUIRED' | 'PHOTO_REQUIRED' | 'INCONSISTENT' | 'SIGNATURE_REQUIRED';
 
 export interface VisitIssue {
   sectionCode: string;
   kind: IssueKind;
-  refType: 'item' | 'reading' | 'rule' | 'battery_unit';
+  refType: 'item' | 'reading' | 'rule' | 'battery_unit' | 'visit';
   refId: string;
   label: string;
 }

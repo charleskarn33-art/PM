@@ -127,6 +127,8 @@ function uploadPhoto(who: As, visitId: string, fields: Record<string, string> = 
   return r.attach('file', file, { filename: name, contentType: 'image/jpeg' });
 }
 
+const sign = (who: As, visitId: string) => who.put(`/visits/${visitId}/signature`, { width: 300, height: 100, strokes: [[[10, 50], [80, 20], [150, 70]]] }).expect(200);
+
 const item = (v: VisitDetail, code: string) => v.sections.flatMap((s) => s.items).find((i) => i.code === code)!;
 const field = (v: VisitDetail, code: string) => v.sections.flatMap((s) => s.readingFields).find((f) => f.code === code)!;
 
@@ -345,8 +347,11 @@ describe('visits', () => {
     expect(blocked.body.error.code).toBe('VISIT_INCOMPLETE');
     expect(blocked.body.error.details.length).toBeGreaterThan(50);
 
-    const filled = await fillAll(as.tech1, v);
+    await fillAll(as.tech1, v);
+    const filled = (await as.tech1.get(`/visits/${v.id}`).expect(200)).body.data as VisitDetail;
     expect(filled.completionPct).toBe(100);
+    expect(filled.issues.map((i) => i.kind)).toEqual(['SIGNATURE_REQUIRED']);
+    await sign(as.tech1, v.id);
     const done = (await as.tech1.post(`/visits/${v.id}/complete`).expect(200)).body.data;
     expect(done).toMatchObject({ status: 'COMPLETED', completionPct: 100, failureCount: 0, issues: [] });
     expect((await as.supervisorA.get(`/pm-schedules/${s.id}`).expect(200)).body.data.status).toBe('COMPLETED');
@@ -360,6 +365,9 @@ describe('visits', () => {
     // Returned to the technician: editable again, then completed and approved.
     const reopened = (await as.tech1.put(`/visits/${v.id}/answers`, { overallComments: 'Photo added' }).expect(200)).body.data;
     expect(reopened.status).toBe('IN_PROGRESS');
+    // The change cleared the signature: sign again, then complete.
+    expect((await as.tech1.post(`/visits/${v.id}/complete`).expect(422)).body.error.details.map((d: { kind: string }) => d.kind)).toEqual(['SIGNATURE_REQUIRED']);
+    await sign(as.tech1, v.id);
     await as.tech1.post(`/visits/${v.id}/complete`).expect(200);
     const approved = (await as.supervisorA.post(`/visits/${v.id}/review`, { decision: 'APPROVE' }).expect(200)).body.data;
     expect(approved).toMatchObject({ status: 'APPROVED', reviewedBy: { id: as.supervisorA.session.user.id } });
@@ -379,7 +387,9 @@ describe('visits', () => {
         })
         .expect(200)
     ).body.data as VisitDetail;
-    expect(bad.issues).toEqual([expect.objectContaining({ kind: 'INCONSISTENT', label: 'DC Modules Operational cannot exceed DC Modules Installed.' })]);
+    expect(bad.issues.filter((i) => i.kind !== 'SIGNATURE_REQUIRED')).toEqual([
+      expect.objectContaining({ kind: 'INCONSISTENT', label: 'DC Modules Operational cannot exceed DC Modules Installed.' }),
+    ]);
     await as.tech1.post(`/visits/${v.id}/complete`).expect(422);
   });
 

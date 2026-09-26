@@ -13,6 +13,22 @@ export const StartVisitInput = z
     siteId: z.uuid().optional(),
     templateCode: z.string().trim().max(40).optional(),
     clientCreatedAt: at.optional(),
+    /** The phone's position when starting; omitted when the location is unavailable. */
+    gps: z
+      .strictObject({
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+        accuracyM: z.number().min(0).max(100_000).optional(),
+        capturedAt: at.optional(),
+      })
+      .optional(),
+    /** Why the PM is started outside the site radius (or without a location), when the geofence asks for one. */
+    outsideRadiusReason: z
+      .string()
+      .trim()
+      .max(500)
+      .optional()
+      .transform((v) => v || undefined),
   })
   .refine((v) => Boolean(v.scheduleId) !== Boolean(v.siteId), { message: 'give either the schedule or the site', path: ['scheduleId'] });
 
@@ -95,3 +111,26 @@ export const BatteryUnitsInput = z.strictObject({
     .max(1000)
     .refine((u) => new Set(u.map((x) => x.unitNumber)).size === u.length, 'each battery once'),
 });
+
+/**
+ * A signature as the strokes drawn on the phone (points in a width × height
+ * box). The server draws the image itself, so no uploaded file is ever served.
+ */
+export const SignatureInput = z
+  .strictObject({
+    name: z.string().trim().min(1).max(120).optional(),
+    width: z.number().int().min(50).max(2000),
+    height: z.number().int().min(50).max(2000),
+    strokes: z
+      .array(z.array(z.tuple([z.number().finite(), z.number().finite()])).min(1).max(2000))
+      .min(1)
+      .max(100),
+  })
+  .superRefine((v, ctx) => {
+    const points = v.strokes.reduce((n, s) => n + s.length, 0);
+    if (points > 5000) ctx.addIssue({ code: 'custom', path: ['strokes'], message: 'too many points' });
+    if (points < 2) ctx.addIssue({ code: 'custom', path: ['strokes'], message: 'the signature is empty' });
+    if (v.strokes.some((s) => s.some(([x, y]) => x < 0 || y < 0 || x > v.width || y > v.height))) {
+      ctx.addIssue({ code: 'custom', path: ['strokes'], message: 'points must lie inside the drawing area' });
+    }
+  });

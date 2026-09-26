@@ -39,6 +39,8 @@ const siteFields = {
   powerConfiguration: optionalText(500),
   /** Number of batteries in the bank; when set, each PM records every battery's voltage. */
   batteryUnitCount: z.number().int().min(1).max(1000).nullish(),
+  /** PM start geofence radius for this site (metres); empty: the system setting. */
+  geofenceRadiusM: z.number().int().min(1).max(100_000).nullish(),
 };
 
 const coordinatesTogether = (v: { latitude?: number | null; longitude?: number | null }) =>

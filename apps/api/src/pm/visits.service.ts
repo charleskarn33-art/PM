@@ -8,7 +8,9 @@ import { parseInput } from '../common/validation.js';
 import { AppConfig } from '../config/app-config.js';
 import type { PmStatus, PmVisit, Prisma, SiteEquipment } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { SettingsService } from '../settings/settings.service.js';
 import { StorageService } from '../storage/storage.service.js';
+import { evaluateGeofence } from './geofence.js';
 import { toDate, toIso } from './dates.js';
 import {
   isEmptyResponse,
@@ -23,7 +25,7 @@ import {
 import { sniffImage } from './image-type.js';
 import { fieldView, itemView, moduleView, num, stringList, toEngineField, toEngineItem } from './mapping.js';
 import { batteryUnitRequirement, loadStructure, loadVisitState, refreshProgress } from './visit-state.js';
-import { AnswersInput, BatteryUnitsInput, PhotoFields, ReviewInput, StartVisitInput, VisitListQuery } from './visits.schemas.js';
+import { AnswersInput, BatteryUnitsInput, PhotoFields, ReviewInput, SignatureInput, StartVisitInput, VisitListQuery } from './visits.schemas.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -60,6 +62,7 @@ export class VisitsService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly config: AppConfig,
+    private readonly settings: SettingsService,
   ) {}
 
   // --- Start -----------------------------------------------------------------------
@@ -114,6 +117,22 @@ export class VisitsService {
 
         const site = await tx.site.findUniqueOrThrow({ where: { id: siteId } });
         if (site.status !== 'ACTIVE') throw invalid('SITE_NOT_ACTIVE', 'PM can only be started at an active site.');
+
+        // Geofence. The position is what the phone reports; it is recorded with the result.
+        const fence = await this.settings.get('geofence');
+        const geo = evaluateGeofence({
+          site: { latitude: num(site.latitude), longitude: num(site.longitude), geofenceRadiusM: site.geofenceRadiusM },
+          defaultRadiusM: fence.radiusM,
+          mode: fence.mode,
+          position: data.gps ?? null,
+        });
+        const where = geo.distanceM == null ? 'Your location is unavailable' : `You are ${Math.round(geo.distanceM)} m from the site`;
+        if (geo.blocked) {
+          throw invalid('OUTSIDE_GEOFENCE', `${where}. PM can only be started within ${geo.radiusM} m of the site.`, { status: geo.status, distanceM: geo.distanceM, radiusM: geo.radiusM });
+        }
+        if (geo.reasonRequired && !data.outsideRadiusReason) {
+          throw invalid('REASON_REQUIRED', `${where} (allowed: ${geo.radiusM} m). Give the reason for starting PM here.`, { status: geo.status, distanceM: geo.distanceM, radiusM: geo.radiusM });
+        }
         // Sections for equipment the site does not have start as not applicable.
         const sections = await tx.pmSection.findMany({ where: { templateId, isActive: true } });
         const notApplicable = sections.filter((s) => s.allowNotApplicable && s.requiresEquipment && !site[EQUIPMENT_FLAG[s.requiresEquipment]]).map((s) => s.code);
@@ -129,6 +148,15 @@ export class VisitsService {
             startedAt: new Date(),
             notApplicableSections: notApplicable,
             clientCreatedAt: data.clientCreatedAt ? new Date(data.clientCreatedAt) : null,
+            gpsLatitude: data.gps?.latitude ?? null,
+            gpsLongitude: data.gps?.longitude ?? null,
+            gpsAccuracyM: data.gps?.accuracyM ?? null,
+            gpsCapturedAt: data.gps?.capturedAt ? new Date(data.gps.capturedAt) : data.gps ? new Date() : null,
+            gpsDistanceM: geo.distanceM == null ? null : Math.round(geo.distanceM * 100) / 100,
+            gpsRadiusM: geo.radiusM,
+            gpsStatus: geo.status,
+            geofenceMode: geo.mode,
+            outsideRadiusReason: geo.status === 'OUTSIDE_RADIUS' || geo.status === 'UNAVAILABLE' ? (data.outsideRadiusReason ?? null) : null,
             createdById: caller.id,
             updatedById: caller.id,
           },
@@ -256,6 +284,7 @@ export class VisitsService {
           });
         }
 
+        await this.clearSignature(tx, visit);
         const updated = await tx.pmVisit.update({
           where: { id: visitId },
           data: {
@@ -282,7 +311,7 @@ export class VisitsService {
     await this.prisma.$transaction(async (tx) => {
       const visit = await this.requireOwnEditable(tx, visitId, caller);
       const state = await loadVisitState(tx, visit);
-      const issues = visitIssues(state);
+      const issues = [...visitIssues(state), ...(await this.signatureIssue(visit))];
       if (issues.length) {
         throw new AppError(
           HttpStatus.UNPROCESSABLE_ENTITY,
@@ -375,7 +404,8 @@ export class VisitsService {
       },
     });
     if (!visit) throw notFound('Visit');
-    const { generator, dc, dcPhases, battery, batteryUnits, solar, nonTechnical, earthing, ...visitRow } = visit;
+    const { generator, dc, dcPhases, battery, batteryUnits, solar, nonTechnical, earthing, signatureKey: _key, ...rest } = visit;
+    const visitRow = { ...rest, gpsLatitude: num(rest.gpsLatitude), gpsLongitude: num(rest.gpsLongitude), gpsAccuracyM: num(rest.gpsAccuracyM), gpsDistanceM: num(rest.gpsDistanceM) };
     const [structure, responses, readings, photos, state] = await Promise.all([
       loadStructure(this.prisma, visit.templateId),
       this.prisma.pmResponse.findMany({ where: { visitId } }),
@@ -407,8 +437,51 @@ export class VisitsService {
       /** Power-module records built from this visit's data (null: section not applicable). */
       modules: moduleView({ generator, dc, dcPhases, battery, batteryUnits, solar, nonTechnical, earthing }),
       progress,
-      issues: EDITABLE.includes(visit.status) ? visitIssues(state) : [],
+      issues: EDITABLE.includes(visit.status) ? [...visitIssues(state), ...(await this.signatureIssue(visit))] : [],
+      signature: visit.signedAt ? { signedAt: visit.signedAt, signedName: visit.signedName } : null,
     };
+  }
+
+  // --- Signature ----------------------------------------------------------------------------
+
+  /**
+   * The technician signs the visit (normally last, on the review screen). Any
+   * later change to the answers, readings, photos or batteries clears the
+   * signature, so what was signed is what is completed.
+   */
+  async sign(visitId: string, input: unknown, caller: AuthUser) {
+    const data = parseInput(SignatureInput, input);
+    const svg = signatureSvg(data.width, data.height, data.strokes);
+    const key = `pm/visits/${visitId}/signature-${randomUUID()}.svg`;
+    const previous = await this.prisma.$transaction(async (tx) => {
+      const visit = await this.requireOwnEditable(tx, visitId, caller);
+      await this.storage.put(key, Buffer.from(svg, 'utf8'), 'image/svg+xml');
+      await tx.pmVisit.update({ where: { id: visitId }, data: { signatureKey: key, signedAt: new Date(), signedName: data.name ?? caller.fullName, updatedById: caller.id } });
+      return visit.signatureKey;
+    });
+    if (previous) await this.storage.delete(previous).catch((err: unknown) => this.logger.error({ err, key: previous }, 'Could not remove a replaced signature'));
+    return this.get(visitId, caller);
+  }
+
+  /** The signature image, if the caller may see the visit. */
+  async signatureFile(visitId: string, caller: AuthUser) {
+    const scope = siteScope(caller);
+    const visit = await this.prisma.pmVisit.findFirst({ where: within<Prisma.PmVisitWhereInput>(scope ? { site: scope } : undefined, { id: visitId }), select: { signatureKey: true } });
+    if (!visit?.signatureKey) throw notFound('Signature');
+    return this.storage.get(visit.signatureKey);
+  }
+
+  private async signatureIssue(visit: Pick<PmVisit, 'id' | 'signedAt'>) {
+    if (visit.signedAt || !(await this.settings.get('pm')).requireSignature) return [];
+    return [{ sectionCode: '', kind: 'SIGNATURE_REQUIRED' as const, refType: 'visit' as const, refId: visit.id, label: 'Technician signature' }];
+  }
+
+  /** A change after signing makes the signature out of date. */
+  private async clearSignature(tx: Tx, visit: PmVisit) {
+    if (!visit.signatureKey) return;
+    await tx.pmVisit.update({ where: { id: visit.id }, data: { signatureKey: null, signedAt: null, signedName: null } });
+    const key = visit.signatureKey;
+    setImmediate(() => void this.storage.delete(key).catch((err: unknown) => this.logger.error({ err, key }, 'Could not remove an outdated signature')));
   }
 
   // --- Battery units --------------------------------------------------------------------
@@ -449,6 +522,7 @@ export class VisitsService {
           const values = { voltageV: u.voltageV, comment: u.comment ?? null, recordedAt: new Date(), clientUpdatedAt: at };
           await tx.batteryUnitReading.upsert({ where: key, create: { visitId, unitNumber: u.unitNumber, siteId: visit.siteId, ...values }, update: values });
         }
+        await this.clearSignature(tx, visit);
         await tx.pmVisit.update({ where: { id: visitId }, data: { updatedById: caller.id } });
         await this.refreshProgress(tx, visit);
         return skipped;
@@ -469,7 +543,11 @@ export class VisitsService {
     if (!type) throw new AppError(HttpStatus.UNSUPPORTED_MEDIA_TYPE, 'UNSUPPORTED_MEDIA_TYPE', 'Photos must be JPEG, PNG or WebP images.');
 
     // Checks first (no file is written for a request that will be refused).
-    const visit = await this.prisma.$transaction((tx) => this.requireOwnEditable(tx, visitId, caller));
+    const visit = await this.prisma.$transaction(async (tx) => {
+      const v = await this.requireOwnEditable(tx, visitId, caller);
+      await this.clearSignature(tx, v);
+      return v;
+    });
     if (data.id) {
       const existing = await this.prisma.pmPhoto.findUnique({ where: { id: data.id }, omit: { storageKey: true } });
       if (existing) {
@@ -519,8 +597,9 @@ export class VisitsService {
 
   async deletePhoto(visitId: string, photoId: string, caller: AuthUser) {
     const key = await this.prisma.$transaction(async (tx) => {
-      await this.requireOwnEditable(tx, visitId, caller);
+      const visit = await this.requireOwnEditable(tx, visitId, caller);
       const photo = await tx.pmPhoto.findFirst({ where: { id: photoId, visitId } });
+      if (photo) await this.clearSignature(tx, visit);
       if (!photo) throw notFound('Photo');
       await tx.pmPhoto.delete({ where: { id: photoId } });
       return photo.storageKey;
@@ -554,4 +633,13 @@ export class VisitsService {
   private refreshProgress(tx: Tx, visit: PmVisit) {
     return refreshProgress(tx, visit);
   }
+}
+
+/** Draws the strokes as a plain SVG (paths only; coordinates rounded to 0.1). */
+export function signatureSvg(width: number, height: number, strokes: [number, number][][]): string {
+  const r = (n: number) => Math.round(n * 10) / 10;
+  const d = strokes
+    .map((s) => (s.length === 1 ? `M${r(s[0]![0])} ${r(s[0]![1])}l0.1 0` : s.map(([x, y], i) => `${i ? 'L' : 'M'}${r(x)} ${r(y)}`).join('')))
+    .join('');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}"><path d="${d}" fill="none" stroke="#000" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }

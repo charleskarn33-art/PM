@@ -7,6 +7,7 @@ import { testConfig } from './support.js';
 
 /** Tables holding data (reference tables are re-seeded, not cleared by order). */
 const DATA_TABLES = [
+  'system_settings',
   'generator_readings',
   'dc_readings',
   'dc_phase_currents',

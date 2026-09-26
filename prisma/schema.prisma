@@ -299,6 +299,8 @@ model Site {
   powerConfiguration   String?    @map("power_configuration") @db.VarChar(500)
   /// Number of batteries in the bank. When set, a PM records each battery's voltage.
   batteryUnitCount     Int?       @map("battery_unit_count") @db.UnsignedSmallInt
+  /// PM start geofence radius for this site (metres); the system setting applies when empty.
+  geofenceRadiusM      Int?       @map("geofence_radius_m") @db.UnsignedInt
   isDemo               Boolean    @default(false) @map("is_demo")
   createdAt            DateTime   @default(now()) @map("created_at")
   updatedAt            DateTime   @updatedAt @map("updated_at")
@@ -461,6 +463,19 @@ enum PmFrequency {
 /// SCHEDULED → IN_PROGRESS → COMPLETED (technician finished, awaiting review)
 /// → APPROVED | REJECTED (returned to the technician); OVERDUE when still
 /// open after the due date; CANCELLED.
+enum GeofenceMode {
+  WARN
+  REQUIRE_REASON
+  BLOCK
+}
+
+enum GpsStatus {
+  WITHIN_RADIUS
+  OUTSIDE_RADIUS
+  UNAVAILABLE
+  SITE_HAS_NO_COORDINATES
+}
+
 enum PmStatus {
   SCHEDULED
   IN_PROGRESS
@@ -647,28 +662,42 @@ model PmSchedule {
 
 /// A PM carried out at a site, on the template version it started with.
 model PmVisit {
-  id                    String    @id @db.Char(36)
-  scheduleId            String?   @map("schedule_id") @db.Char(36)
-  siteId                String    @map("site_id") @db.Char(36)
-  templateId            String    @map("template_id") @db.Char(36)
-  technicianId          String    @map("technician_id") @db.Char(36)
-  status                PmStatus  @default(IN_PROGRESS)
-  startedAt             DateTime  @map("started_at")
-  completedAt           DateTime? @map("completed_at")
-  completionPct         Decimal   @default(0) @map("completion_pct") @db.Decimal(5, 2)
-  failureCount          Int       @default(0) @map("failure_count") @db.UnsignedSmallInt
+  id                    String        @id @db.Char(36)
+  scheduleId            String?       @map("schedule_id") @db.Char(36)
+  siteId                String        @map("site_id") @db.Char(36)
+  templateId            String        @map("template_id") @db.Char(36)
+  technicianId          String        @map("technician_id") @db.Char(36)
+  status                PmStatus      @default(IN_PROGRESS)
+  startedAt             DateTime      @map("started_at")
+  completedAt           DateTime?     @map("completed_at")
+  completionPct         Decimal       @default(0) @map("completion_pct") @db.Decimal(5, 2)
+  failureCount          Int           @default(0) @map("failure_count") @db.UnsignedSmallInt
   /// Section codes marked not applicable (JSON array).
-  notApplicableSections Json      @map("not_applicable_sections")
-  overallComments       String?   @map("overall_comments") @db.VarChar(4000)
-  reviewedById          String?   @map("reviewed_by") @db.Char(36)
-  reviewedAt            DateTime? @map("reviewed_at")
-  reviewComments        String?   @map("review_comments") @db.VarChar(2000)
-  clientCreatedAt       DateTime? @map("client_created_at")
-  isDemo                Boolean   @default(false) @map("is_demo")
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
-  createdById           String?   @map("created_by") @db.Char(36)
-  updatedById           String?   @map("updated_by") @db.Char(36)
+  notApplicableSections Json          @map("not_applicable_sections")
+  overallComments       String?       @map("overall_comments") @db.VarChar(4000)
+  reviewedById          String?       @map("reviewed_by") @db.Char(36)
+  reviewedAt            DateTime?     @map("reviewed_at")
+  reviewComments        String?       @map("review_comments") @db.VarChar(2000)
+  clientCreatedAt       DateTime?     @map("client_created_at")
+  /// Where the technician was when starting (as reported by the phone), and the geofence result.
+  gpsLatitude           Decimal?      @map("gps_latitude") @db.Decimal(9, 6)
+  gpsLongitude          Decimal?      @map("gps_longitude") @db.Decimal(9, 6)
+  gpsAccuracyM          Decimal?      @map("gps_accuracy_m") @db.Decimal(10, 2)
+  gpsCapturedAt         DateTime?     @map("gps_captured_at")
+  gpsDistanceM          Decimal?      @map("gps_distance_m") @db.Decimal(12, 2)
+  gpsRadiusM            Int?          @map("gps_radius_m") @db.UnsignedInt
+  gpsStatus             GpsStatus?    @map("gps_status")
+  geofenceMode          GeofenceMode? @map("geofence_mode")
+  outsideRadiusReason   String?       @map("outside_radius_reason") @db.VarChar(500)
+  /// The technician's signature (storage key of a server-drawn SVG).
+  signatureKey          String?       @map("signature_key") @db.VarChar(255)
+  signedAt              DateTime?     @map("signed_at")
+  signedName            String?       @map("signed_name") @db.VarChar(120)
+  isDemo                Boolean       @default(false) @map("is_demo")
+  createdAt             DateTime      @default(now()) @map("created_at")
+  updatedAt             DateTime      @updatedAt @map("updated_at")
+  createdById           String?       @map("created_by") @db.Char(36)
+  updatedById           String?       @map("updated_by") @db.Char(36)
 
   schedule   PmSchedule?  @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
   site       Site         @relation(fields: [siteId], references: [id], onDelete: Restrict)
@@ -944,4 +973,15 @@ model EarthingReading {
 
   @@index([siteId, recordedAt])
   @@map("earthing_readings")
+}
+
+/// Administrator-changeable settings (e.g. the PM start geofence), as JSON by key.
+/// The API supplies defaults for keys never saved.
+model SystemSetting {
+  key         String   @id @db.VarChar(64)
+  value       Json
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  updatedById String?  @map("updated_by") @db.Char(36)
+
+  @@map("system_settings")
 }
