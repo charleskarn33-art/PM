@@ -32,6 +32,16 @@ function RootNavigator() {
             title: 'Start PM',
           }}
         />
+        <Stack.Screen name="action/[id]" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="failure/report"
+          options={{
+            headerShown: true,
+            headerStyle: { backgroundColor: colors.navy },
+            headerTintColor: colors.white,
+            title: 'Report a failure',
+          }}
+        />
         <Stack.Screen
           name="site/[id]"
           options={{

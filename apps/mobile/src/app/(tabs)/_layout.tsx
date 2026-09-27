@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router/js-tabs';
 import type { ComponentProps } from 'react';
 import type { ColorValue } from 'react-native';
+import { useAuth } from '@/providers/auth-provider';
 import { colors } from '@/theme';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
@@ -12,6 +13,8 @@ const tab = (title: string, icon: IconName) => ({
 });
 
 export default function TabsLayout() {
+  // Maintenance users work on corrective actions only.
+  const pm = useAuth().profile?.role !== 'maintenance';
   return (
     <Tabs
       screenOptions={{
@@ -25,8 +28,9 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={tab('Home', 'home')} />
-      <Tabs.Screen name="sites" options={tab('My Sites', 'location')} />
-      <Tabs.Screen name="pm" options={tab('PM Schedule', 'clipboard')} />
+      <Tabs.Screen name="sites" options={{ ...tab('My Sites', 'location'), ...(pm ? {} : { href: null }) }} />
+      <Tabs.Screen name="pm" options={{ ...tab('PM Schedule', 'clipboard'), ...(pm ? {} : { href: null }) }} />
+      <Tabs.Screen name="actions" options={tab('Actions', 'construct')} />
       <Tabs.Screen name="profile" options={tab('Profile', 'person-circle')} />
     </Tabs>
   );

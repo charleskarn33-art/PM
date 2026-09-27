@@ -14,17 +14,20 @@ import { colors, spacing, toneColors } from '@/theme';
 export default function HomeScreen() {
   const { profile } = useAuth();
   const router = useRouter();
-  const sites = useApi<unknown[]>('/sites?pageSize=1');
-  const open = useApi<Schedule[]>('/pm-schedules?mine=true&status=SCHEDULED&pageSize=1');
-  const overdue = useApi<Schedule[]>('/pm-schedules?mine=true&status=OVERDUE&pageSize=1');
-  const inProgress = useApi<VisitSummary[]>('/visits?mine=true&status=IN_PROGRESS&pageSize=20');
-  const returned = useApi<VisitSummary[]>('/visits?mine=true&status=REJECTED&pageSize=20');
+  // Maintenance users work on corrective actions only (no PM data).
+  const pm = profile?.role !== 'maintenance';
+  const sites = useApi<unknown[]>(pm ? '/sites?pageSize=1' : null);
+  const open = useApi<Schedule[]>(pm ? '/pm-schedules?mine=true&status=SCHEDULED&pageSize=1' : null);
+  const overdue = useApi<Schedule[]>(pm ? '/pm-schedules?mine=true&status=OVERDUE&pageSize=1' : null);
+  const inProgress = useApi<VisitSummary[]>(pm ? '/visits?mine=true&status=IN_PROGRESS&pageSize=20' : null);
+  const returned = useApi<VisitSummary[]>(pm ? '/visits?mine=true&status=REJECTED&pageSize=20' : null);
+  const actions = useApi<unknown[]>('/corrective-actions?assignedTo=me&status=active&pageSize=1');
   const local = useLocalVisits();
-  const all = [sites, open, overdue, inProgress, returned];
+  const all = [sites, open, overdue, inProgress, returned, actions];
   const refreshing = all.some((q) => q.refreshing);
   const total = (q: { meta?: Record<string, unknown> }) => (typeof q.meta?.total === 'number' ? q.meta.total : 0);
 
-  if (all.every((q) => q.loading)) return <LoadingView />;
+  if (actions.loading && (!pm || all.every((q) => q.loading))) return <LoadingView />;
   const error = all.find((q) => q.error)?.error;
   // Visits on the phone first (they include changes not sent yet), then any others the server lists.
   const onPhone = local.filter((v) => isEditable(v.visit) || v.syncStatus !== 'SYNCED');
@@ -40,10 +43,15 @@ export default function HomeScreen() {
       <SyncBar />
       {error ? <Banner tone="danger" message={error} /> : null}
       <View style={styles.grid}>
-        <Stat label="My sites" value={total(sites)} onPress={() => router.push('/sites')} />
-        <Stat label="Scheduled PMs" value={total(open)} onPress={() => router.push('/pm')} />
-        <Stat label="Overdue PMs" value={total(overdue)} danger={total(overdue) > 0} onPress={() => router.push('/pm')} />
-        <Stat label="PMs in progress" value={working.length} />
+        {pm ? (
+          <>
+            <Stat label="My sites" value={total(sites)} onPress={() => router.push('/sites')} />
+            <Stat label="Scheduled PMs" value={total(open)} onPress={() => router.push('/pm')} />
+            <Stat label="Overdue PMs" value={total(overdue)} danger={total(overdue) > 0} onPress={() => router.push('/pm')} />
+            <Stat label="PMs in progress" value={working.length} />
+          </>
+        ) : null}
+        <Stat label="My corrective actions" value={total(actions)} onPress={() => router.push('/actions')} />
       </View>
       {working.length ? <Text style={styles.heading}>Continue</Text> : null}
       {working.map((v) => (

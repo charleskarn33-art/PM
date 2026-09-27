@@ -39,7 +39,9 @@ const Ctx = createContext<OfflineContext | null>(null);
  * edits, and when a postponed change is due for another try.
  */
 export function OfflineProvider({ children }: { children: ReactNode }) {
-  const { status, userId } = useAuth();
+  const { status, userId, profile } = useAuth();
+  // Maintenance users only work on corrective actions: no PM data to keep.
+  const pmWork = profile?.role !== 'maintenance';
   const [pair, setPair] = useState<{ userId: string; store: OfflineStore; engine: SyncEngine } | null>(null);
   const [counts, setCounts] = useState<OutboxCounts>(EMPTY);
   const [syncing, setSyncing] = useState(false);
@@ -83,7 +85,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
           setProblem('No connection. Changes are kept on this phone and sent when you are back online.');
         } else {
           setProblem(null);
-          if (forcePack || Date.now() - packFetchedAt.current > PACK_MAX_AGE_MS) {
+          if (pmWork && (forcePack || Date.now() - packFetchedAt.current > PACK_MAX_AGE_MS)) {
             const data = await engine.refreshPack();
             packFetchedAt.current = Date.now();
             setPack({ userId: store.userId, data, savedAt: new Date().toISOString() });
@@ -101,7 +103,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
         if (next != null) retryTimer.current = setTimeout(() => retry.current(), Math.max(1_000, next - Date.now()));
       }
     },
-    [active],
+    [active, pmWork],
   );
 
   useEffect(() => {

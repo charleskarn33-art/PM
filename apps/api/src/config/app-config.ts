@@ -46,6 +46,7 @@ export const envSchema = z
       }, 'must be an IANA time zone, e.g. Africa/Monrovia'),
     // Largest photo accepted (bytes).
     PHOTO_MAX_BYTES: z.coerce.number().int().min(100_000).max(25_000_000).default(10_000_000),
+    DOCUMENT_MAX_BYTES: z.coerce.number().int().min(100_000).max(50_000_000).default(20_000_000),
     STORAGE_DRIVER: z.enum(['local']).default('local'),
     STORAGE_PATH: z.string().min(1),
     STORAGE_BASE_URL: z.url(),
@@ -83,6 +84,8 @@ export class AppConfig {
   readonly webForwardSecret!: string | null;
   readonly orgTimezone!: string;
   readonly photoMaxBytes!: number;
+  /** Largest document (PDF) attached to a failure or corrective action. */
+  readonly documentMaxBytes!: number;
   readonly storage!: { driver: 'local'; path: string; baseUrl: string };
   readonly logLevel!: string;
   readonly rateLimitPerMinute!: number;
@@ -123,6 +126,7 @@ export function loadConfig(source: Record<string, string | undefined>): AppConfi
     webForwardSecret: e.WEB_FORWARD_SECRET ?? null,
     orgTimezone: e.ORG_TIMEZONE,
     photoMaxBytes: e.PHOTO_MAX_BYTES,
+    documentMaxBytes: e.DOCUMENT_MAX_BYTES,
     storage: { driver: e.STORAGE_DRIVER, path: e.STORAGE_PATH, baseUrl: e.STORAGE_BASE_URL.replace(/\/$/, '') },
     logLevel: e.LOG_LEVEL,
     rateLimitPerMinute: e.RATE_LIMIT_PER_MINUTE,

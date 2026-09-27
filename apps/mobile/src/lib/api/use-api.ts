@@ -61,6 +61,12 @@ export function useApi<T>(path: string | null): ApiQuery<T> {
     void load();
   }, [load]);
 
+  const reload = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
+
   return {
     data: state.data,
     meta: state.meta,
@@ -68,10 +74,6 @@ export function useApi<T>(path: string | null): ApiQuery<T> {
     loading: Boolean(path) && !state.loaded,
     refreshing,
     savedAt: state.savedAt,
-    reload: async () => {
-      setRefreshing(true);
-      await load();
-      setRefreshing(false);
-    },
+    reload,
   };
 }

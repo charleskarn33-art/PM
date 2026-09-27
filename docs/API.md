@@ -160,6 +160,52 @@ without a position (422 `REASON_REQUIRED`); **BLOCK** refuses (422
 is what the phone reports; it is stored with the result (`gpsStatus`,
 `gpsDistanceM`, `gpsRadiusM`, `geofenceMode`).
 
+## Failures
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/failures?siteId&visitId&status&severity&source&q&from&to` | `failures.read` (scoped: sites in scope, plus failures with an action assigned to the caller) — `status=active` for everything not closed; `q` searches the title or the number (`FL-000012`) |
+| GET | `/failures/:id` | `failures.read` (scoped) — with its actions, timeline (`updates`) and attachments |
+| POST | `/failures` | `failures.report` — `{ id?, siteId, title, description?, severity?, category? }`, at a site the caller is assigned to or supervises; retrying with the same `id` returns the same failure |
+| PATCH | `/failures/:id` | `failures.manage`, site in the caller's regions — `{ title?, description?, severity? }` (recorded on the timeline) |
+| POST | `/failures/:id/close` | `failures.manage` — `{ note }`; 409 `ACTIONS_OPEN` while an action is open, assigned, in progress or completed |
+| POST | `/failures/:id/reopen` | `failures.manage` — `{ note }`; earlier closed actions no longer count |
+| POST | `/failures/:id/comments` | `failures.read` and one of `failures.report`, `failures.manage`, `corrective_actions.manage`, or assignee of an action — `{ body, correctiveActionId? }` |
+| POST | `/failures/:id/attachments` | as comments — multipart: `file` (JPEG / PNG / WebP photo up to `PHOTO_MAX_BYTES`, or PDF up to `DOCUMENT_MAX_BYTES`, checked by content), `id?`, `correctiveActionId?`, `caption?`; not on a closed failure |
+| GET | `/failures/:id/attachments/:attachmentId` | `failures.read` (scoped) — photos inline, documents as downloads |
+| DELETE | `/failures/:id/attachments/:attachmentId` | the uploader, or a supervisor of the site's region |
+
+**Failure engine.** Completing a PM turns each failed answer (the item's
+failure rule) in an applicable section into a failure (`source`
+`PM_CHECKLIST`, the item's `failureSeverity`, numbered `FL-000001`…). One
+failure per visit and question: completing the PM again (after it was
+returned) updates it; a failure no longer reported is deleted if nobody acted
+on it, otherwise marked `stillReported: false`.
+
+**Status.** A failure's status follows its corrective actions (the least
+advanced one decides): OPEN (none, or none assigned) → ASSIGNED → IN_PROGRESS
+→ RESOLVED (completed) → VERIFIED → CLOSED (all closed). Withdrawn actions do
+not count. It can also be closed by hand with a note, and reopened.
+
+## Corrective actions
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/corrective-actions?status&assignedTo&siteId&failureId&overdue` | `corrective_actions.read` (scoped: sites in scope, plus actions assigned to the caller) — `assignedTo=me`, `status=active` (open to completed), `overdue=true` (active and past the due date, in `ORG_TIMEZONE`) |
+| GET | `/corrective-actions/:id` | `corrective_actions.read` (scoped) — with the failure, its timeline entries and attachments |
+| POST | `/corrective-actions` | `corrective_actions.manage`, site in the caller's regions — `{ id?, failureId, title, description?, priority?, assignedToId?, dueDate? }`; not on a closed failure |
+| PATCH | `/corrective-actions/:id` | `corrective_actions.manage` — `{ title?, description?, priority?, dueDate? }` |
+| POST | `/corrective-actions/:id/assign` | `corrective_actions.manage` — `{ assignedToId, dueDate? }`; the assignee must be active, hold `corrective_actions.work` and work at the site (assigned to it or in its region) |
+| POST | `/corrective-actions/:id/start` | `corrective_actions.work`, the assignee — ASSIGNED → IN_PROGRESS |
+| POST | `/corrective-actions/:id/complete` | `corrective_actions.work`, the assignee — `{ note }` (what was done) → COMPLETED |
+| POST | `/corrective-actions/:id/verify` | `corrective_actions.manage`, not the person who did the work — `{ decision: APPROVE \| REJECT, note? }` (note required to send it back) → VERIFIED or IN_PROGRESS |
+| POST | `/corrective-actions/:id/close` | `corrective_actions.manage` — `{ note? }`; closes a verified action, or withdraws one not started (note required) |
+| POST | `/corrective-actions/:id/comments`, `/corrective-actions/:id/attachments` | as for failures, marked with the action |
+
+A step not possible from the current status is refused with 409
+`INVALID_TRANSITION`. Every step, comment and change is kept on the failure's
+timeline with who and when.
+
 ## Field pack (offline data for the phone)
 
 | Method | Path | Permission |

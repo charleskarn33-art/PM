@@ -234,6 +234,35 @@ a written report, and **approval before the next phase**.
   server's copy matched the phone's (COMPLETED, 100 %). Not yet run on a
   device (see Remaining work in the phase report).
 
+**Phase 8 — Failures.**
+- Tables `failures`, `corrective_actions`, `failure_updates` (timeline:
+  comments, status changes, recorded edits) and `failure_attachments`
+  (migration `failures_corrective_actions`); numbers FL-000001 / CA-000001.
+- Failure engine: completing a PM records a failure for each failed answer in
+  an applicable section, with the item's severity. Idempotent — one failure
+  per visit and question (unique index); completing again after a return
+  updates it, deletes it if no longer reported and nobody acted on it, or
+  marks it no longer reported.
+- Failures reported by hand at a site (technicians at their sites,
+  supervisors in their regions), with a client id so a retry does not
+  duplicate.
+- Corrective-action workflow: create (optionally assigned) → assign → start
+  → complete (with what was done) → verify (approve, or send back with a
+  note) → close; withdraw an action not started (with a note). The assignee
+  must hold `corrective_actions.work` and work at the site; the person who did
+  the work cannot verify it. The failure's status follows its actions; it
+  can be closed by hand (no open action) and reopened.
+- Comments, photos (JPEG / PNG / WebP) and PDF documents on failures and
+  actions, checked by content, stored through the storage service; documents
+  are served as downloads. New setting `DOCUMENT_MAX_BYTES` (default 20 MB).
+- Mobile: Actions tab (assigned to me: to do, awaiting check, closed), action
+  detail with the failure, timeline and files; start, notes, photos and
+  completion; "Report a failure" from a site. Maintenance users see Home and
+  Actions only. These screens need a connection to change anything (viewing
+  uses the saved copy).
+- Web screens for failures and corrective actions come with the web
+  dashboard (Phase 9); notifications (assignment, overdue) with Phase 12.
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).

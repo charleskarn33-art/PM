@@ -25,6 +25,12 @@ export async function signIn(http: Http, email: string, password = PASSWORD) {
     post: (path: string, body?: object) => request(http).post(`/api/v1${path}`).set('Authorization', `Bearer ${token}`).send(body ?? {}),
     patch: (path: string, body: object) => request(http).patch(`/api/v1${path}`).set('Authorization', `Bearer ${token}`).send(body),
     put: (path: string, body: object) => request(http).put(`/api/v1${path}`).set('Authorization', `Bearer ${token}`).send(body),
+    del: (path: string) => request(http).delete(`/api/v1${path}`).set('Authorization', `Bearer ${token}`),
+    upload: (path: string, file: Buffer, name: string, fields: Record<string, string> = {}) => {
+      let r = request(http).post(`/api/v1${path}`).set('Authorization', `Bearer ${token}`);
+      for (const [k, v] of Object.entries(fields)) r = r.field(k, v);
+      return r.attach('file', file, { filename: name });
+    },
   };
   return { ...as, session: res.body.data as { accessToken: string; refreshToken: string; user: { id: string; permissions: string[] } } };
 }

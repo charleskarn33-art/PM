@@ -16,6 +16,7 @@ import { requestId } from './common/request-id.js';
 import { ResponseEnvelopeInterceptor } from './common/response.interceptor.js';
 import type { AppConfig } from './config/app-config.js';
 import { ConfigModule } from './config/config.module.js';
+import { FailuresModule } from './failures/failures.module.js';
 import { HealthModule } from './health/health.module.js';
 import { OrganisationModule } from './organisation/organisation.module.js';
 import { PmModule } from './pm/pm.module.js';
@@ -67,6 +68,7 @@ export class AppModule {
         UsersModule,
         AssignmentsModule,
         PmModule,
+        FailuresModule,
         ...extra,
       ],
       providers: [

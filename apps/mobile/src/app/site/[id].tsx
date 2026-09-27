@@ -68,6 +68,7 @@ export default function SiteScreen() {
         </Card>
       ))}
       <PrimaryButton title="Start unscheduled PM" onPress={() => router.push({ pathname: '/pm/start', params: { siteId: s.id, siteName: `${s.siteCode} · ${s.siteName}` } })} />
+      <PrimaryButton title="Report a failure" variant="outline" onPress={() => router.push({ pathname: '/failure/report', params: { siteId: s.id, siteName: `${s.siteCode} · ${s.siteName}` } })} />
 
       <Text style={styles.heading}>Recent visits</Text>
       {visits.data?.length ? null : <Text style={styles.meta}>{visits.error ? visits.error : 'No visits yet.'}</Text>}

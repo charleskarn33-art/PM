@@ -232,3 +232,64 @@ export interface Settings {
 
 /** Editable answer fields sent to PUT /visits/:id/answers. */
 export type ResponsePatch = Partial<Pick<ResponseRow, 'answer' | 'numericValue' | 'textValue' | 'selectedOptions' | 'dateValue' | 'datetimeValue' | 'comment'>>;
+
+export type Severity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type FailureStatus = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'RESOLVED' | 'VERIFIED' | 'CLOSED';
+export type ActionStatus = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'COMPLETED' | 'VERIFIED' | 'CLOSED';
+
+export interface PersonRef {
+  id: string;
+  fullName: string;
+}
+
+export interface FailureSummary {
+  id: string;
+  number: string;
+  title: string;
+  severity: Severity;
+  status: FailureStatus;
+}
+
+export interface FailureUpdate {
+  id: string;
+  kind: 'COMMENT' | 'STATUS' | 'SYSTEM';
+  body: string | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  createdAt: string;
+  correctiveActionId: string | null;
+  author: PersonRef | null;
+}
+
+export interface Attachment {
+  id: string;
+  kind: 'PHOTO' | 'DOCUMENT';
+  fileName: string;
+  contentType: string;
+  caption: string | null;
+  createdAt: string;
+  uploadedBy: PersonRef;
+}
+
+export interface CorrectiveActionSummary {
+  id: string;
+  number: string;
+  title: string;
+  priority: Severity;
+  status: ActionStatus;
+  dueDate: string | null;
+  site: { id: string; siteCode: string; siteName: string };
+  assignedTo: PersonRef | null;
+  failure: FailureSummary;
+}
+
+export interface CorrectiveActionDetail extends CorrectiveActionSummary {
+  description: string | null;
+  failure: FailureSummary & { description: string | null; visit: { id: string; startedAt: string } | null };
+  startedAt: string | null;
+  completedAt: string | null;
+  completionNote: string | null;
+  verificationNote: string | null;
+  updates: FailureUpdate[];
+  attachments: Attachment[];
+}

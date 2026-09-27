@@ -6,6 +6,7 @@ import { AppError } from '../common/http-exception.filter.js';
 import { invalid, notFound, rethrowDbError } from '../common/prisma-errors.js';
 import { parseInput } from '../common/validation.js';
 import { AppConfig } from '../config/app-config.js';
+import { syncVisitFailures } from '../failures/failure-engine.js';
 import type { PmStatus, PmVisit, Prisma, SiteEquipment } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SettingsService } from '../settings/settings.service.js';
@@ -334,6 +335,8 @@ export class VisitsService {
         },
       });
       if (visit.scheduleId) await tx.pmSchedule.update({ where: { id: visit.scheduleId }, data: { status: 'COMPLETED' } });
+      // Failed answers become failures (idempotent: completing again updates, never duplicates).
+      await syncVisitFailures(tx, visit);
     });
     return this.get(visitId, caller);
   }

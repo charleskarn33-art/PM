@@ -73,6 +73,17 @@ model User {
   pmVisitsReviewed PmVisit[]         @relation("PmVisitReviewer")
   pmPhotos         PmPhoto[]
 
+  failuresReported   Failure[]           @relation("FailureReportedBy")
+  failuresClosed     Failure[]           @relation("FailureClosedBy")
+  actionsAssigned    CorrectiveAction[]  @relation("ActionAssignedTo")
+  actionsAssignedBy  CorrectiveAction[]  @relation("ActionAssignedBy")
+  actionsCompleted   CorrectiveAction[]  @relation("ActionCompletedBy")
+  actionsVerified    CorrectiveAction[]  @relation("ActionVerifiedBy")
+  actionsClosed      CorrectiveAction[]  @relation("ActionClosedBy")
+  actionsCreated     CorrectiveAction[]  @relation("ActionCreatedBy")
+  failureUpdates     FailureUpdate[]     @relation("FailureUpdateAuthor")
+  failureAttachments FailureAttachment[] @relation("FailureAttachmentUploadedBy")
+
   // Audit back-relations (who created / changed what).
   usersCreated     User[]            @relation("UserCreatedBy")
   usersUpdated     User[]            @relation("UserUpdatedBy")
@@ -326,6 +337,9 @@ model Site {
   nonTechnical      NonTechnicalObservation[]
   earthingReadings  EarthingReading[]
 
+  failures          Failure[]
+  correctiveActions CorrectiveAction[]
+
   @@index([siteName])
   @@index([regionId])
   @@index([clusterId])
@@ -571,6 +585,7 @@ model PmChecklistItem {
   section   PmSection    @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   responses PmResponse[]
   photos    PmPhoto[]
+  failures  Failure[]
 
   @@unique([sectionId, code])
   @@index([sectionId, sortOrder])
@@ -716,6 +731,7 @@ model PmVisit {
   solar        SolarReading?
   nonTechnical NonTechnicalObservation?
   earthing     EarthingReading?
+  failures     Failure[]
 
   @@index([siteId, startedAt])
   @@index([technicianId, startedAt])
@@ -984,4 +1000,195 @@ model SystemSetting {
   updatedById String?  @map("updated_by") @db.Char(36)
 
   @@map("system_settings")
+}
+
+// -----------------------------------------------------------------------------
+// Failures and corrective actions.
+//
+// - A failed checklist answer of a completed PM becomes a failure (one per
+//   visit and question: completing the PM again updates it, never duplicates
+//   it). Failures can also be reported by hand at a site.
+// - A failure is worked through corrective actions: assigned → in progress →
+//   completed → verified → closed. The failure's status follows its actions;
+//   it can also be closed with a note (e.g. no action needed) and reopened.
+// - Every comment and status change is kept in failure_updates (the timeline);
+//   photos and documents in failure_attachments (files in storage).
+// -----------------------------------------------------------------------------
+
+enum FailureSource {
+  PM_CHECKLIST
+  MANUAL
+}
+
+enum FailureStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  VERIFIED
+  CLOSED
+}
+
+enum CorrectiveActionStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  VERIFIED
+  CLOSED
+}
+
+enum FailureUpdateKind {
+  COMMENT
+  STATUS
+  SYSTEM
+}
+
+enum AttachmentKind {
+  PHOTO
+  DOCUMENT
+}
+
+model Failure {
+  id              String        @id @db.Char(36)
+  /// Shown as FL-000001.
+  number          Int           @unique @default(autoincrement()) @db.UnsignedInt
+  source          FailureSource
+  siteId          String        @map("site_id") @db.Char(36)
+  visitId         String?       @map("visit_id") @db.Char(36)
+  checklistItemId String?       @map("checklist_item_id") @db.Char(36)
+  sectionCode     String?       @map("section_code") @db.VarChar(40)
+  category        PmCategory?
+  severity        Severity
+  title           String        @db.VarChar(500)
+  description     String?       @db.VarChar(4000)
+  status          FailureStatus @default(OPEN)
+  /// Checklist failures: false once a corrected PM no longer reports it.
+  stillReported   Boolean       @default(true) @map("still_reported")
+  reportedById    String?       @map("reported_by") @db.Char(36)
+  detectedAt      DateTime      @map("detected_at")
+  resolvedAt      DateTime?     @map("resolved_at")
+  verifiedAt      DateTime?     @map("verified_at")
+  closedAt        DateTime?     @map("closed_at")
+  /// Closed by hand (with a note) rather than by closing its actions.
+  closedById      String?       @map("closed_by") @db.Char(36)
+  closeNote       String?       @map("close_note") @db.VarChar(2000)
+  /// Actions closed before this moment no longer count (the problem came back).
+  reopenedAt      DateTime?     @map("reopened_at")
+  isDemo          Boolean       @default(false) @map("is_demo")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  createdById     String?       @map("created_by") @db.Char(36)
+  updatedById     String?       @map("updated_by") @db.Char(36)
+
+  site        Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  visit       PmVisit?            @relation(fields: [visitId], references: [id], onDelete: Restrict)
+  item        PmChecklistItem?    @relation(fields: [checklistItemId], references: [id], onDelete: Restrict)
+  reportedBy  User?               @relation("FailureReportedBy", fields: [reportedById], references: [id], onDelete: Restrict)
+  closedBy    User?               @relation("FailureClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  actions     CorrectiveAction[]
+  updates     FailureUpdate[]
+  attachments FailureAttachment[]
+
+  @@unique([visitId, checklistItemId])
+  @@index([siteId, status])
+  @@index([status, severity])
+  @@index([detectedAt])
+  @@index([checklistItemId])
+  @@map("failures")
+}
+
+model CorrectiveAction {
+  id               String                 @id @db.Char(36)
+  /// Shown as CA-000001.
+  number           Int                    @unique @default(autoincrement()) @db.UnsignedInt
+  failureId        String                 @map("failure_id") @db.Char(36)
+  siteId           String                 @map("site_id") @db.Char(36)
+  title            String                 @db.VarChar(255)
+  description      String?                @db.VarChar(4000)
+  priority         Priority               @default(MEDIUM)
+  status           CorrectiveActionStatus @default(OPEN)
+  assignedToId     String?                @map("assigned_to") @db.Char(36)
+  assignedById     String?                @map("assigned_by") @db.Char(36)
+  assignedAt       DateTime?              @map("assigned_at")
+  dueDate          DateTime?              @map("due_date") @db.Date
+  startedAt        DateTime?              @map("started_at")
+  completedAt      DateTime?              @map("completed_at")
+  completedById    String?                @map("completed_by") @db.Char(36)
+  completionNote   String?                @map("completion_note") @db.VarChar(2000)
+  verifiedAt       DateTime?              @map("verified_at")
+  verifiedById     String?                @map("verified_by") @db.Char(36)
+  verificationNote String?                @map("verification_note") @db.VarChar(2000)
+  closedAt         DateTime?              @map("closed_at")
+  closedById       String?                @map("closed_by") @db.Char(36)
+  closeNote        String?                @map("close_note") @db.VarChar(2000)
+  isDemo           Boolean                @default(false) @map("is_demo")
+  createdAt        DateTime               @default(now()) @map("created_at")
+  updatedAt        DateTime               @updatedAt @map("updated_at")
+  createdById      String?                @map("created_by") @db.Char(36)
+  updatedById      String?                @map("updated_by") @db.Char(36)
+
+  failure     Failure             @relation(fields: [failureId], references: [id], onDelete: Restrict)
+  site        Site                @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  assignedTo  User?               @relation("ActionAssignedTo", fields: [assignedToId], references: [id], onDelete: Restrict)
+  assignedBy  User?               @relation("ActionAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+  completedBy User?               @relation("ActionCompletedBy", fields: [completedById], references: [id], onDelete: Restrict)
+  verifiedBy  User?               @relation("ActionVerifiedBy", fields: [verifiedById], references: [id], onDelete: Restrict)
+  closedBy    User?               @relation("ActionClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  createdBy   User?               @relation("ActionCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updates     FailureUpdate[]
+  attachments FailureAttachment[]
+
+  @@index([failureId])
+  @@index([assignedToId, status])
+  @@index([siteId, status])
+  @@index([status, dueDate])
+  @@map("corrective_actions")
+}
+
+/// The timeline of a failure and its actions: comments, status changes and
+/// system notes (author null).
+model FailureUpdate {
+  id                 String            @id @default(uuid(7)) @db.Char(36)
+  failureId          String            @map("failure_id") @db.Char(36)
+  correctiveActionId String?           @map("corrective_action_id") @db.Char(36)
+  authorId           String?           @map("author_id") @db.Char(36)
+  kind               FailureUpdateKind
+  body               String?           @db.VarChar(4000)
+  fromStatus         String?           @map("from_status") @db.VarChar(20)
+  toStatus           String?           @map("to_status") @db.VarChar(20)
+  createdAt          DateTime          @default(now()) @map("created_at")
+
+  failure Failure           @relation(fields: [failureId], references: [id], onDelete: Restrict)
+  action  CorrectiveAction? @relation(fields: [correctiveActionId], references: [id], onDelete: Restrict)
+  author  User?             @relation("FailureUpdateAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([failureId, createdAt])
+  @@index([correctiveActionId, createdAt])
+  @@map("failure_updates")
+}
+
+/// A photo or document attached to a failure (optionally to one of its
+/// actions). The file is in storage under `storage_key`.
+model FailureAttachment {
+  id                 String         @id @db.Char(36)
+  failureId          String         @map("failure_id") @db.Char(36)
+  correctiveActionId String?        @map("corrective_action_id") @db.Char(36)
+  kind               AttachmentKind
+  storageKey         String         @unique @map("storage_key") @db.VarChar(255)
+  fileName           String         @map("file_name") @db.VarChar(255)
+  contentType        String         @map("content_type") @db.VarChar(80)
+  sizeBytes          Int            @map("size_bytes") @db.UnsignedInt
+  sha256             String         @db.Char(64)
+  caption            String?        @db.VarChar(255)
+  uploadedById       String         @map("uploaded_by") @db.Char(36)
+  createdAt          DateTime       @default(now()) @map("created_at")
+
+  failure    Failure           @relation(fields: [failureId], references: [id], onDelete: Restrict)
+  action     CorrectiveAction? @relation(fields: [correctiveActionId], references: [id], onDelete: Restrict)
+  uploadedBy User              @relation("FailureAttachmentUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([failureId, createdAt])
+  @@index([correctiveActionId])
+  @@map("failure_attachments")
 }
