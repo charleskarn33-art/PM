@@ -83,9 +83,9 @@ a password (temporary password from an administrator), the Technician role and
 an active site assignment.
 
 The web app's server calls the API and keeps the tokens in httpOnly cookies;
-page scripts never see them. The mobile app keeps them in SecureStore. The
-web pages not yet moved to the API (Phase 9) still read the archived Supabase
-backend and show no data without it. The phone app is fully on the API.
+page scripts never see them; photos, signatures and attachments are relayed by
+the web server (`/files/…`, allow-listed paths only). The mobile app keeps its
+tokens in SecureStore.
 
 ## 4. Checks
 
@@ -98,7 +98,6 @@ pnpm --filter @ipt/api build
 pnpm exec prisma validate
 ```
 
-The mobile app runs entirely on this API. Apart from sign-in, sign-out,
-password change and the profile page, the web app still reads data from the
-archived Supabase backend (see `docs/legacy/`) until Phase 9. The browser suite
-in `e2e/` belongs to that backend and is rebuilt on the API in Phase 14.
+The web app and the mobile app run entirely on this API; nothing reads the
+archived Supabase backend (see `docs/legacy/`). An end-to-end browser suite on
+the API is added in Phase 14.

@@ -1,65 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { derivePmKpis, monthPeriod } from './dashboard';
-import { assertNoPublicSecrets, readPublicEnv } from './env';
-import { breadcrumbsFor, navigationFor } from './navigation';
+import { assertNoPublicSecrets } from './env';
+import { breadcrumbsFor, homeFor, navigationFor } from './navigation';
 import { isPublicPath, safeNextPath } from './routes';
-
-describe('derivePmKpis', () => {
-  it('derives pending and completion percentage', () => {
-    expect(derivePmKpis({ scheduled: 40, completed: 30, overdue: 4 })).toEqual({
-      scheduled: 40,
-      completed: 30,
-      overdue: 4,
-      pending: 6,
-      completionPct: 75,
-    });
-  });
-  it('rounds completion to one decimal', () => {
-    expect(derivePmKpis({ scheduled: 3, completed: 1, overdue: 0 }).completionPct).toBe(33.3);
-  });
-  it('reports no completion percentage when nothing is scheduled', () => {
-    expect(derivePmKpis({ scheduled: 0, completed: 0, overdue: 0 })).toMatchObject({ pending: 0, completionPct: null });
-  });
-});
-
-describe('monthPeriod', () => {
-  it('returns the calendar month bounds', () => {
-    const p = monthPeriod(new Date(2026, 1, 10));
-    expect(p).toMatchObject({ today: '2026-02-10', monthStart: '2026-02-01', monthEnd: '2026-02-28' });
-  });
-});
-
-describe('assertNoPublicSecrets', () => {
-  it('rejects secrets exposed with the NEXT_PUBLIC_ prefix', () => {
-    expect(() => assertNoPublicSecrets({ NEXT_PUBLIC_SUPABASE_SECRET_KEY: 'x' })).toThrow(/NEXT_PUBLIC_SUPABASE_SECRET_KEY/);
-    expect(() => assertNoPublicSecrets({ SUPABASE_SECRET_KEY: 'x', NEXT_PUBLIC_SUPABASE_URL: 'u' })).not.toThrow();
-  });
-});
-
-describe('readPublicEnv', () => {
-  const url = 'https://abc.supabase.co';
-  it('accepts the publishable key or legacy anon key', () => {
-    expect(readPublicEnv({ NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_x' }))
-      .toEqual({ supabaseUrl: url, supabaseKey: 'sb_publishable_x' });
-    expect(readPublicEnv({ NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon' }).supabaseKey).toBe('anon');
-  });
-  it('fails loudly when configuration is missing', () => {
-    expect(() => readPublicEnv({})).toThrow(/NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY/);
-    expect(() => readPublicEnv({ NEXT_PUBLIC_SUPABASE_URL: 'not a url', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'k' })).toThrow(
-      /not a valid URL/,
-    );
-  });
-  it('refuses secret keys in the browser app', () => {
-    expect(() =>
-      readPublicEnv({ NEXT_PUBLIC_SUPABASE_URL: url, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_abc' }),
-    ).toThrow(/secret/);
-  });
-});
 
 describe('routes', () => {
   it('identifies public paths', () => {
     expect(isPublicPath('/login')).toBe(true);
-    expect(isPublicPath('/forgot-password')).toBe(true);
     expect(isPublicPath('/change-password')).toBe(false);
     expect(isPublicPath('/api/health')).toBe(true);
     expect(isPublicPath('/auth/set-password')).toBe(false);
@@ -81,29 +27,34 @@ describe('routes', () => {
   });
 });
 
-describe('navigation', () => {
-  const labels = (role: Parameters<typeof navigationFor>[0]) =>
-    navigationFor(role).flatMap((s) => s.items.map((i) => i.label));
+describe('assertNoPublicSecrets', () => {
+  it('rejects secrets with a browser-visible prefix', () => {
+    expect(() => assertNoPublicSecrets({ NEXT_PUBLIC_API_SECRET: 'x' })).toThrow(/NEXT_PUBLIC_API_SECRET/);
+    expect(() => assertNoPublicSecrets({ WEB_FORWARD_SECRET: 'x', NEXT_PUBLIC_APP_NAME: 'IPT' })).not.toThrow();
+  });
+});
 
-  it('shows administration only to super admins', () => {
-    expect(labels('super_admin')).toContain('Users');
-    expect(labels('regional_supervisor')).not.toContain('Users');
-    expect(labels('viewer')).not.toContain('PM Templates');
+describe('navigation', () => {
+  const ADMIN = ['users.read', 'users.manage', 'org.manage', 'sites.read', 'pm_templates.manage', 'settings.manage', 'analytics.read', 'audit.read', 'pm_schedules.read', 'pm_visits.read', 'failures.read', 'corrective_actions.read', 'reports.read'];
+  const SUPERVISOR = ['users.read', 'sites.read', 'analytics.read', 'pm_schedules.read', 'pm_visits.read', 'failures.read', 'corrective_actions.read', 'reports.read'];
+  const MAINTENANCE = ['sites.read', 'failures.read', 'corrective_actions.read', 'corrective_actions.work'];
+  const labels = (p: string[]) => navigationFor(p).flatMap((s) => s.items.map((i) => i.label));
+
+  it('follows the API permissions', () => {
+    expect(labels(ADMIN)).toEqual(expect.arrayContaining(['Dashboard', 'Users', 'Organization', 'PM Templates', 'Settings']));
+    expect(labels(SUPERVISOR)).not.toContain('Users');
+    expect(labels(SUPERVISOR)).toContain('Technicians');
+    expect(labels(MAINTENANCE)).toEqual(['Sites', 'Failures', 'Corrective Actions', 'Notifications', 'My Profile']);
   });
-  it('gives technicians a field-focused menu', () => {
-    expect(labels('technician')).toEqual(['Dashboard', 'Sites', 'Corrective Actions', 'Notifications', 'My Profile']);
+  it('shows what later phases bring as not yet available', () => {
+    const planned = navigationFor(ADMIN).flatMap((s) => s.items).filter((i) => i.plannedPhase).map((i) => `${i.label}:${i.plannedPhase}`);
+    expect(planned).toEqual(['Analytics:10', 'Reports:11', 'Audit Log:13', 'Notifications:12']);
   });
-  it('opens Phase 2 organisation screens', () => {
-    expect(labels('super_admin')).toEqual(expect.arrayContaining(['Sites', 'Technicians', 'Supervisors', 'Users', 'Organization']));
-    expect(labels('regional_supervisor')).toContain('Technicians');
-    expect(labels('regional_supervisor')).not.toContain('Supervisors');
-    const sites = navigationFor('viewer').flatMap((s) => s.items).find((i) => i.label === 'Sites');
-    expect(sites?.plannedPhase).toBeUndefined();
+  it('lands on the first page the user may open', () => {
+    expect(homeFor(ADMIN)).toBe('/dashboard');
+    expect(homeFor(MAINTENANCE)).toBe('/sites');
   });
   it('builds breadcrumbs from navigation labels', () => {
-    expect(breadcrumbsFor('/profile')).toEqual([
-      { label: 'IPT PowerTech PM', href: '/dashboard' },
-      { label: 'My Profile' },
-    ]);
+    expect(breadcrumbsFor('/profile')).toEqual([{ label: 'IPT PowerTech PM', href: '/dashboard' }, { label: 'My Profile' }]);
   });
 });

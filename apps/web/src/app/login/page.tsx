@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
 import { Brand } from '@/components/brand';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { LoginForm } from './login-form';
@@ -18,11 +17,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         </CardHeader>
         <CardContent>
           <LoginForm next={next} />
-          <Link href="/forgot-password" className="mt-4 block text-center text-sm text-info hover:underline">
-            Forgot your password?
-          </Link>
           <p className="mt-6 text-xs text-muted-foreground">
-            Accounts are created by your administrator. Contact your supervisor if you cannot sign in.
+            Accounts are created by your administrator. If you forgot your password, ask your administrator for a temporary one.
           </p>
         </CardContent>
       </Card>

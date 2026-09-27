@@ -2,31 +2,23 @@
  * Content-Security-Policy for every page. Scripts need the per-request nonce
  * (Next.js adds it to its own scripts); 'strict-dynamic' lets those load the
  * app's chunks. Styles allow inline attributes (charts and UI set them).
- * Images and connections may go only to this site — the browser never calls
- * the API directly — and, while legacy pages remain, the Supabase project
- * when one is configured.
+ * Images and connections go only to this site: the browser never calls the
+ * API directly (photos and files are relayed by this server).
  */
-export function buildCsp({ nonce, supabaseUrl, dev }: { nonce: string; supabaseUrl?: string; dev: boolean }): string {
-  let supabase = '';
-  try {
-    supabase = supabaseUrl ? new URL(supabaseUrl).origin : '';
-  } catch {
-    supabase = '';
-  }
-  const legacy = supabase ? ` ${supabase} ${supabase.replace(/^http/, 'ws')}` : '';
+export function buildCsp({ nonce, dev }: { nonce: string; dev: boolean }): string {
   const directives = [
     `default-src 'self'`,
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${dev ? ` 'unsafe-eval'` : ''}`,
     `style-src 'self' 'unsafe-inline'`,
-    `img-src 'self' data: blob:${supabase ? ` ${supabase}` : ''}`,
+    `img-src 'self' data: blob:`,
     `font-src 'self'`,
-    `connect-src 'self'${legacy}`,
+    `connect-src 'self'`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
     `frame-ancestors 'none'`,
   ];
-  if (!dev && (!supabase || supabase.startsWith('https:'))) directives.push('upgrade-insecure-requests');
+  if (!dev) directives.push('upgrade-insecure-requests');
   return directives.join('; ');
 }
 

@@ -1,105 +1,114 @@
-import { ROLE_LABELS } from '@ipt/shared';
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { requireCapability } from '@/lib/auth';
-import { loadRegions, loadSupervisors } from '@/lib/org-data';
-import { createClient } from '@/lib/supabase/server';
-import { AccessForm, SupervisorDetailsForm, TechnicianDetailsForm } from './user-forms';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { load } from '@/lib/api/data';
+import type { Region } from '@/lib/api/types';
+import { requirePermission } from '@/lib/auth';
+import { formatDateTime } from '@/lib/format';
+import { AccountButton, DetailsForm, RegionsForm, RolesForm, TemporaryPasswordForm } from '../user-forms';
 
 export const metadata: Metadata = { title: 'User' };
 
-export default async function UserPage({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ id: string }>;
-  searchParams: Promise<{ invited?: string }>;
-}) {
-  const [{ id }, { invited }] = await Promise.all([params, searchParams]);
-  const session = await requireCapability('manage_users');
-  const supabase = await createClient();
+interface UserDetail {
+  id: string;
+  email: string;
+  fullName: string;
+  phone: string | null;
+  employeeCode: string | null;
+  isActive: boolean;
+  homeRegionId: string | null;
+  lastLoginAt: string | null;
+  mustChangePassword: boolean;
+  lockedUntil: string | null;
+  isDemo: boolean;
+  createdAt: string;
+  roles: { code: string; name: string }[];
+  regions: { id: string; name: string }[];
+}
 
-  const [profileResult, scopesResult, techResult, supResult, regions, supervisors] = await Promise.all([
-    supabase.from('profiles').select('*').eq('id', id).maybeSingle(),
-    supabase.from('user_region_scopes').select('region_id').eq('profile_id', id),
-    supabase.from('technicians').select('*').eq('id', id).maybeSingle(),
-    supabase.from('supervisors').select('*').eq('id', id).maybeSingle(),
-    loadRegions(supabase),
-    loadSupervisors(supabase),
-  ]);
-  for (const r of [profileResult, scopesResult, techResult, supResult]) {
-    if (r.error) throw new Error(`Unable to load user: ${r.error.message}`);
-  }
-  const profile = profileResult.data;
-  if (!profile) notFound();
-  const regionOptions = regions.map((r) => ({ id: r.id, name: r.name }));
-  const technician = techResult.data;
-  const supervisor = supResult.data;
+export default async function UserPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ created?: string; passwordError?: string }> }) {
+  const { id } = await params;
+  const sp = await searchParams;
+  const session = await requirePermission('users.manage');
+  const [u, roles, regions] = await Promise.all([load<UserDetail>(`/users/${id}`), load<{ code: string; name: string; description: string }[]>('/roles'), load<Region[]>('/org/hierarchy')]);
+  const regionOptions = regions.map((r) => ({ id: r.id, label: r.name }));
+  const locked = u.lockedUntil != null && new Date(u.lockedUntil) > new Date();
+  const self = u.id === session.userId;
+  const admin = session.isGlobal;
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl space-y-6">
       <PageHeader
-        title={profile.full_name || profile.email}
-        description={
-          <span className="flex flex-wrap items-center gap-2">
-            {profile.email}
-            <Badge tone="info">{ROLE_LABELS[profile.role]}</Badge>
-            <Badge tone={profile.is_active ? 'success' : 'warning'}>{profile.is_active ? 'Active' : 'Pending'}</Badge>
-          </span>
+        title={u.fullName}
+        description={u.email}
+        actions={
+          <>
+            <Badge tone={u.isActive ? 'success' : 'neutral'}>{u.isActive ? 'Active' : 'Inactive'}</Badge>
+            {u.mustChangePassword ? <Badge tone="warning">Must change password</Badge> : null}
+            {locked ? <Badge tone="danger">Sign-in locked</Badge> : null}
+            {u.isDemo ? <Badge tone="neutral">Demo</Badge> : null}
+          </>
         }
       />
-      {invited ? <Alert tone="success">Invitation sent to {profile.email}.</Alert> : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Access</CardTitle>
-          <CardDescription>Role and activation changes are recorded in the audit log.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <AccessForm
-            userId={profile.id}
-            role={profile.role}
-            isActive={profile.is_active}
-            regionId={profile.region_id}
-            scopeRegionIds={(scopesResult.data ?? []).map((s) => s.region_id)}
-            regions={regionOptions}
-            isSelf={profile.id === session.userId}
-          />
-        </CardContent>
-      </Card>
-
-      {profile.role === 'technician' && technician ? (
+      {sp.created ? <Alert tone="success">User created.</Alert> : null}
+      {sp.passwordError ? <Alert tone="danger">The temporary password was not set: {sp.passwordError}</Alert> : null}
+      <p className="text-sm text-muted-foreground">
+        Created {formatDateTime(u.createdAt)} · last sign-in {formatDateTime(u.lastLoginAt)}
+      </p>
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Technician details</CardTitle>
+            <CardTitle className="text-base">Details</CardTitle>
           </CardHeader>
           <CardContent>
-            <TechnicianDetailsForm
-              userId={profile.id}
-              employeeCode={technician.employee_code}
-              supervisorId={technician.supervisor_id}
-              regionId={technician.region_id}
-              supervisors={supervisors.filter((s) => s.is_active)}
-              regions={regionOptions}
-            />
+            {admin ? (
+              <DetailsForm user={u} regions={regionOptions} />
+            ) : (
+              <p className="text-sm">
+                {u.phone ?? 'No phone'} · {u.employeeCode ?? 'No employee code'}
+              </p>
+            )}
           </CardContent>
         </Card>
-      ) : null}
-
-      {profile.role === 'regional_supervisor' && supervisor ? (
         <Card>
           <CardHeader>
-            <CardTitle>Supervisor details</CardTitle>
+            <CardTitle className="text-base">Account</CardTitle>
           </CardHeader>
-          <CardContent>
-            <SupervisorDetailsForm userId={profile.id} employeeCode={supervisor.employee_code} />
+          <CardContent className="space-y-4">
+            {admin && !self ? (
+              <>
+                {u.isActive ? <AccountButton id={u.id} step="deactivate" label="Deactivate account" variant="destructive" /> : <AccountButton id={u.id} step="activate" label="Activate account" />}
+                {locked ? <AccountButton id={u.id} step="unlock" label="Unlock sign-in" /> : null}
+                <TemporaryPasswordForm id={u.id} />
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">{self ? 'You cannot change your own account here; use My Profile.' : 'Only an administrator can change accounts.'}</p>
+            )}
           </CardContent>
         </Card>
-      ) : null}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Roles</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {admin && !self ? (
+              <RolesForm id={u.id} roles={roles.map((r) => ({ id: r.code, label: r.name, description: r.description }))} selected={u.roles.map((r) => r.code)} />
+            ) : (
+              <p className="text-sm">{u.roles.map((r) => r.name).join(', ')}</p>
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Regions in scope</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {admin ? <RegionsForm id={u.id} regions={regionOptions} selected={u.regions.map((r) => r.id)} /> : <p className="text-sm">{u.regions.map((r) => r.name).join(', ') || 'None'}</p>}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

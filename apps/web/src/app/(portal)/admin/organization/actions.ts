@@ -1,54 +1,20 @@
 'use server';
 
-import { validateOrgUnit } from '@ipt/shared';
-import { revalidatePath } from 'next/cache';
-import { requireCapability } from '@/lib/auth';
-import { formValues, type FormValues } from '@/lib/form-values';
-import { createClient } from '@/lib/supabase/server';
+import { api } from '@/lib/api/server';
+import { requirePermission } from '@/lib/auth';
+import { submit, text, type FormState } from '@/lib/form-action';
 
-export type OrgKind = 'region' | 'cluster' | 'county';
+const PATH = { region: 'regions', cluster: 'clusters', county: 'counties' } as const;
+const PARENT = { region: null, cluster: 'regionId', county: 'clusterId' } as const;
 
-export interface OrgFormState {
-  error?: string;
-  success?: string;
-  fieldErrors?: Partial<Record<'code' | 'name' | 'parent_id', string>>;
-  values?: FormValues;
-}
-
-const LABEL: Record<OrgKind, string> = { region: 'Region', cluster: 'Cluster', county: 'County' };
-
-export async function saveOrgUnit(_prev: OrgFormState, formData: FormData): Promise<OrgFormState> {
-  await requireCapability('manage_organization');
-  const kind = String(formData.get('kind')) as OrgKind;
-  if (!['region', 'cluster', 'county'].includes(kind)) return { error: 'Unknown item type.' };
-  const id = String(formData.get('id') ?? '');
-  const values = formValues(formData);
-  const result = validateOrgUnit(values, kind !== 'region');
-  if (!result.ok) return { error: 'Please correct the highlighted fields.', fieldErrors: result.errors, values };
-  const { code, name, parent_id, is_active } = result.value;
-
-  const supabase = await createClient();
-  let error: { code?: string; message: string } | null = null;
-  if (kind === 'region') {
-    const row = { code, name, is_active };
-    ({ error } = id
-      ? await supabase.from('regions').update(row).eq('id', id)
-      : await supabase.from('regions').insert(row));
-  } else if (kind === 'cluster') {
-    const row = { code, name, is_active, region_id: parent_id! };
-    ({ error } = id
-      ? await supabase.from('clusters').update(row).eq('id', id)
-      : await supabase.from('clusters').insert(row));
-  } else {
-    const row = { code, name, is_active, cluster_id: parent_id! };
-    ({ error } = id
-      ? await supabase.from('counties').update(row).eq('id', id)
-      : await supabase.from('counties').insert(row));
-  }
-  if (error) {
-    if (error.code === '23505') return { fieldErrors: { code: 'This code or name is already in use.' }, values };
-    return { error: `Unable to save ${LABEL[kind].toLowerCase()}: ${error.message}`, values };
-  }
-  revalidatePath('/admin/organization');
-  return { success: `${LABEL[kind]} ${id ? 'updated' : 'created'}.` };
+/** Creates or edits a region, cluster or county (`kind`, optional `id`). */
+export async function saveOrgUnit(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requirePermission('org.manage');
+  const kind = text(formData, 'kind') as keyof typeof PATH;
+  if (!(kind in PATH)) return { error: 'Unknown kind.' };
+  const id = text(formData, 'id');
+  const body: Record<string, unknown> = { code: text(formData, 'code') ?? '', name: text(formData, 'name') ?? '', isActive: formData.get('isActive') === 'on' };
+  const parent = PARENT[kind];
+  if (!id && parent) body[parent] = text(formData, 'parentId');
+  return submit(formData, () => api(id ? `/${PATH[kind]}/${id}` : `/${PATH[kind]}`, { method: id ? 'PATCH' : 'POST', body }), id ? 'Saved.' : 'Created.', ['/admin/organization']);
 }

@@ -1,6 +1,6 @@
 import 'server-only';
 import { cookies, headers } from 'next/headers';
-import { apiFetch, clientIpFrom, type ApiCall, type ApiResult } from './client';
+import { ApiError, apiFetch, clientIpFrom, type ApiCall, type ApiResult } from './client';
 import { apiEnv } from './config';
 import { clearedCookies, cookieNames, sessionCookies, type TokenPair } from './session-cookies';
 
@@ -36,4 +36,39 @@ export async function storeSession(pair: TokenPair): Promise<void> {
 export async function clearSession(): Promise<void> {
   const jar = await cookies();
   for (const c of clearedCookies(apiEnv().secureCookies)) jar.set(c.name, c.value, c.options);
+}
+
+/** Fetches a file from the API as the signed-in user (photos, signatures, attachments); the raw response. */
+export async function apiRaw(path: string): Promise<Response> {
+  const [{ accessToken }, client] = await Promise.all([readTokens(), requestClient()]);
+  const env = apiEnv();
+  const headers: Record<string, string> = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  if (env.forwardSecret && client.clientIp) {
+    headers['X-IPT-Forward-Key'] = env.forwardSecret;
+    headers['X-IPT-Client-IP'] = client.clientIp;
+  }
+  return fetch(`${env.apiUrl}/api/v1${path}`, { headers, cache: 'no-store', signal: AbortSignal.timeout(30_000) });
+}
+
+/** Sends a multipart upload to the API as the signed-in user. */
+export async function apiUpload<T>(path: string, form: FormData): Promise<ApiResult<T>> {
+  const [{ accessToken }, client] = await Promise.all([readTokens(), requestClient()]);
+  const env = apiEnv();
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  if (client.userAgent) headers['User-Agent'] = client.userAgent.slice(0, 255);
+  if (env.forwardSecret && client.clientIp) {
+    headers['X-IPT-Forward-Key'] = env.forwardSecret;
+    headers['X-IPT-Client-IP'] = client.clientIp;
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${env.apiUrl}/api/v1${path}`, { method: 'POST', headers, body: form, cache: 'no-store', signal: AbortSignal.timeout(60_000) });
+  } catch {
+    throw new ApiError(503, 'API_UNAVAILABLE', 'The server cannot be reached. Try again in a moment.');
+  }
+  const json = (await res.json().catch(() => null)) as { data?: T; error?: { code: string; message: string; details?: unknown } } | null;
+  if (!res.ok) throw new ApiError(res.status, json?.error?.code ?? `HTTP_${res.status}`, json?.error?.message ?? 'The upload failed.', json?.error?.details);
+  return { data: json?.data as T };
 }

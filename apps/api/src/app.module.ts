@@ -18,6 +18,7 @@ import type { AppConfig } from './config/app-config.js';
 import { ConfigModule } from './config/config.module.js';
 import { FailuresModule } from './failures/failures.module.js';
 import { HealthModule } from './health/health.module.js';
+import { InsightsModule } from './insights/insights.module.js';
 import { OrganisationModule } from './organisation/organisation.module.js';
 import { PmModule } from './pm/pm.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -69,6 +70,7 @@ export class AppModule {
         AssignmentsModule,
         PmModule,
         FailuresModule,
+        InsightsModule,
         ...extra,
       ],
       providers: [

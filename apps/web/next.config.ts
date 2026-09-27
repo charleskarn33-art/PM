@@ -14,8 +14,6 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   // The shared workspace package ships TypeScript source.
   transpilePackages: ['@ipt/shared'],
-  // PDF rendering runs in Node route handlers; keep the renderer out of the bundle.
-  serverExternalPackages: ['@react-pdf/renderer'],
   poweredByHeader: false,
   async headers() {
     return [{ source: '/:path*', headers: securityHeaders }];

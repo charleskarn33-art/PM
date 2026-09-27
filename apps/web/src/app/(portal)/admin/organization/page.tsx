@@ -1,34 +1,18 @@
 import type { Metadata } from 'next';
+import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { requireCapability } from '@/lib/auth';
-import { loadClusters, loadCounties, loadRegions } from '@/lib/org-data';
-import { createClient } from '@/lib/supabase/server';
+import { load } from '@/lib/api/data';
+import type { Region } from '@/lib/api/types';
+import { requirePermission } from '@/lib/auth';
 import { OrgUnitForm } from './org-unit-form';
 
 export const metadata: Metadata = { title: 'Organization' };
 
-interface Unit {
-  id: string;
-  code: string;
-  name: string;
-  is_active: boolean;
-  parent_id: string | null;
-  parentName?: string;
-}
+type Unit = { id: string; code: string; name: string; isActive: boolean; parentName?: string };
 
-function UnitList({
-  kind,
-  units,
-  parents,
-  parentLabel,
-}: {
-  kind: 'region' | 'cluster' | 'county';
-  units: Unit[];
-  parents?: { id: string; name: string }[];
-  parentLabel?: string;
-}) {
+function UnitList({ kind, units }: { kind: 'region' | 'cluster' | 'county'; units: Unit[] }) {
   if (units.length === 0) return <p className="text-sm text-muted-foreground">None yet.</p>;
   return (
     <ul className="divide-y">
@@ -42,12 +26,12 @@ function UnitList({
                 {u.parentName ? <span className="ml-2 text-xs text-muted-foreground">· {u.parentName}</span> : null}
               </span>
               <span className="flex items-center gap-2">
-                {u.is_active ? null : <Badge tone="neutral">Inactive</Badge>}
+                {u.isActive ? null : <Badge tone="neutral">Inactive</Badge>}
                 <span className="text-xs text-info">Edit</span>
               </span>
             </summary>
             <div className="mt-3 rounded-lg bg-muted/40 p-3">
-              <OrgUnitForm kind={kind} initial={u} parents={parents} parentLabel={parentLabel} />
+              <OrgUnitForm kind={kind} initial={u} />
             </div>
           </details>
         </li>
@@ -57,47 +41,19 @@ function UnitList({
 }
 
 export default async function OrganizationPage() {
-  await requireCapability('manage_organization');
-  const supabase = await createClient();
-  const [regions, clusters, counties] = await Promise.all([loadRegions(supabase), loadClusters(supabase), loadCounties(supabase)]);
-  const regionName = new Map(regions.map((r) => [r.id, r.name]));
-  const clusterName = new Map(clusters.map((c) => [c.id, c.name]));
-  const regionParents = regions.map((r) => ({ id: r.id, name: r.name }));
-  const clusterParents = clusters.map((c) => ({ id: c.id, name: `${c.name} (${regionName.get(c.region_id) ?? '?'})` }));
-
+  const session = await requirePermission('org.manage');
+  if (!session.isGlobal) notFound();
+  const regions = await load<Region[]>('/org/hierarchy');
+  const clusters = regions.flatMap((r) => r.clusters.map((c) => ({ ...c, parentName: r.name })));
+  const counties = clusters.flatMap((c) => c.counties.map((k) => ({ ...k, parentName: `${c.name}, ${c.parentName}` })));
   const sections = [
-    {
-      kind: 'region' as const,
-      title: 'Regions',
-      description: 'Top level of the hierarchy. Managers and supervisors are scoped by region.',
-      units: regions.map((r) => ({ ...r, parent_id: null })),
-      parents: undefined,
-      parentLabel: undefined,
-    },
-    {
-      kind: 'cluster' as const,
-      title: 'Clusters',
-      description: 'Groups of counties within a region.',
-      units: clusters.map((c) => ({ ...c, parent_id: c.region_id, parentName: regionName.get(c.region_id) })),
-      parents: regionParents,
-      parentLabel: 'Region',
-    },
-    {
-      kind: 'county' as const,
-      title: 'Counties',
-      description: 'Counties within a cluster. Sites belong to a county.',
-      units: counties.map((c) => ({ ...c, parent_id: c.cluster_id, parentName: clusterName.get(c.cluster_id) })),
-      parents: clusterParents,
-      parentLabel: 'Cluster',
-    },
+    { kind: 'region' as const, title: 'Regions', description: 'Top level. Managers, supervisors and viewers are scoped by region.', units: regions, parents: undefined, parentLabel: undefined },
+    { kind: 'cluster' as const, title: 'Clusters', description: 'Groups of counties within a region.', units: clusters, parents: regions.map((r) => ({ id: r.id, name: r.name })), parentLabel: 'Region' },
+    { kind: 'county' as const, title: 'Counties', description: 'Counties within a cluster.', units: counties, parents: clusters.map((c) => ({ id: c.id, name: `${c.name} (${c.parentName})` })), parentLabel: 'Cluster' },
   ];
-
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Organization"
-        description="Region → Cluster → County → Site. Items are deactivated rather than deleted so history is preserved."
-      />
+      <PageHeader title="Organization" description="Region → Cluster → County → Site. Entries are deactivated rather than deleted so history is kept." />
       <div className="grid gap-6 xl:grid-cols-3">
         {sections.map((s) => (
           <Card key={s.kind}>
@@ -106,14 +62,10 @@ export default async function OrganizationPage() {
               <CardDescription>{s.description}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <UnitList kind={s.kind} units={s.units} parents={s.parents} parentLabel={s.parentLabel} />
+              <UnitList kind={s.kind} units={s.units} />
               <div className="rounded-lg border border-dashed p-3">
                 <p className="mb-2 text-sm font-medium">Add {s.kind}</p>
-                {s.parents && s.parents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Create a {s.parentLabel?.toLowerCase()} first.</p>
-                ) : (
-                  <OrgUnitForm kind={s.kind} parents={s.parents} parentLabel={s.parentLabel} />
-                )}
+                {s.parents && s.parents.length === 0 ? <p className="text-sm text-muted-foreground">Create a {s.parentLabel?.toLowerCase()} first.</p> : <OrgUnitForm kind={s.kind} parents={s.parents} parentLabel={s.parentLabel} />}
               </div>
             </CardContent>
           </Card>

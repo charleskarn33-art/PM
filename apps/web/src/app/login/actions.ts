@@ -15,7 +15,7 @@ export interface LoginState {
 export async function signIn(_prev: LoginState, formData: FormData): Promise<LoginState> {
   const email = String(formData.get('email') ?? '').trim();
   const password = String(formData.get('password') ?? '');
-  const next = safeNextPath(String(formData.get('next') ?? ''));
+  const next = safeNextPath(String(formData.get('next') ?? ''), '/');
 
   if (!email || !password) {
     return { error: 'Enter your email address and password.', email };

@@ -5,6 +5,7 @@ import type { AuthUser } from '../auth/auth-user.js';
 import { regionScope, siteScope, within } from '../authz/scope.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { OPEN_SCHEDULE, siteOverview } from './site-overview.js';
 import {
   ClusterInput,
   ClusterPatch,
@@ -115,7 +116,7 @@ export class OrganisationService {
       },
     });
     if (!site) throw notFound('Site');
-    return site;
+    return { ...site, overview: (await siteOverview(this.prisma, [site.id])).get(site.id)! };
   }
 
   /** Paginated site list with filters (no unbounded reads), limited to the caller's scope. */
@@ -128,20 +129,28 @@ export class OrganisationService {
         q.clusterId ? { clusterId: q.clusterId } : {},
         q.countyId ? { countyId: q.countyId } : {},
         q.status ? { status: q.status } : {},
-        q.q ? { OR: [{ siteCode: { contains: q.q } }, { siteName: { contains: q.q } }] } : {},
+        q.q ? { OR: [{ siteCode: { contains: q.q } }, { siteName: { contains: q.q } }, { county: { name: { contains: q.q } } }] } : {},
+        q.supervisorId ? { assignments: { some: { userId: q.supervisorId, role: 'SUPERVISOR', active: true } } } : {},
+        q.technicianId ? { assignments: { some: { userId: q.technicianId, role: 'TECHNICIAN', active: true } } } : {},
+        q.pm === 'overdue' ? { pmSchedules: { some: { status: 'OVERDUE' } } } : {},
+        q.pm === 'scheduled' ? { pmSchedules: { some: { status: { in: [...OPEN_SCHEDULE] } }, none: { status: 'OVERDUE' } } } : {},
+        q.pm === 'none' ? { pmSchedules: { none: { status: { in: [...OPEN_SCHEDULE] } } } } : {},
       ],
     };
+    const order: Prisma.SiteOrderByWithRelationInput =
+      q.sort === 'region' ? { region: { name: q.dir } } : q.sort === 'siteName' ? { siteName: q.dir } : q.sort === 'status' ? { status: q.dir } : { siteCode: q.dir };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.site.findMany({
         where,
-        orderBy: [{ siteCode: 'asc' }],
+        orderBy: [order, { siteCode: 'asc' }],
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
         include: { region: { select: { name: true } }, cluster: { select: { name: true } }, county: { select: { name: true } } },
       }),
       this.prisma.site.count({ where }),
     ]);
-    return { items, total, page: q.page, pageSize: q.pageSize };
+    const overview = await siteOverview(this.prisma, items.map((i) => i.id));
+    return { items: items.map((i) => ({ ...i, overview: overview.get(i.id)! })), total, page: q.page, pageSize: q.pageSize };
   }
 
   // --- Helpers -------------------------------------------------------------------

@@ -1,64 +1,62 @@
 'use client';
 
 import { useActionState } from 'react';
-import { Alert } from '@/components/ui/alert';
+import { FieldError, FormMessages } from '@/components/form-bits';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { FormSelect } from '@/components/ui/select';
-import { saveOrgUnit, type OrgFormState, type OrgKind } from './actions';
+import type { FormState } from '@/lib/form-action';
+import { saveOrgUnit } from './actions';
 
-interface Props {
-  kind: OrgKind;
-  initial?: { id: string; code: string; name: string; parent_id: string | null; is_active: boolean };
+export function OrgUnitForm({
+  kind,
+  initial,
+  parents,
+  parentLabel,
+}: {
+  kind: 'region' | 'cluster' | 'county';
+  initial?: { id: string; code: string; name: string; isActive: boolean };
   parents?: { id: string; name: string }[];
   parentLabel?: string;
-}
-
-export function OrgUnitForm({ kind, initial, parents, parentLabel }: Props) {
-  const [state, action, pending] = useActionState<OrgFormState, FormData>(saveOrgUnit, {});
+}) {
+  const [state, action, pending] = useActionState<FormState, FormData>(saveOrgUnit, {});
   const e = state.fieldErrors ?? {};
-  const values = state.values;
-  const prefix = `${kind}-${initial?.id ?? 'new'}`;
+  const key = initial?.id ?? `new-${kind}`;
   return (
-    <form action={action} className="space-y-3">
+    <form action={action} className="space-y-2">
       <input type="hidden" name="kind" value={kind} />
       {initial ? <input type="hidden" name="id" value={initial.id} /> : null}
-      {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
-      {state.success ? <Alert tone="success">{state.success}</Alert> : null}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor={`${prefix}-code`}>Code</Label>
-          <Input id={`${prefix}-code`} name="code" defaultValue={values?.code ?? initial?.code} required aria-invalid={Boolean(e.code) || undefined} />
-          {e.code ? <p className="text-xs text-danger">{e.code}</p> : null}
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={`${prefix}-name`}>Name</Label>
-          <Input id={`${prefix}-name`} name="name" defaultValue={values?.name ?? initial?.name} required aria-invalid={Boolean(e.name) || undefined} />
-          {e.name ? <p className="text-xs text-danger">{e.name}</p> : null}
-        </div>
-        {parents ? (
-          <div className="space-y-1.5">
-            <Label htmlFor={`${prefix}-parent`}>{parentLabel}</Label>
-            <FormSelect id={`${prefix}-parent`} name="parent_id" defaultValue={values?.parent_id ?? initial?.parent_id ?? ''} required>
-              <option value="" disabled>
-                Select…
+      <FormMessages state={state} />
+      {!initial && parents ? (
+        <div className="space-y-1">
+          <Label htmlFor={`${key}-parent`}>{parentLabel}</Label>
+          <FormSelect id={`${key}-parent`} name="parentId" required defaultValue={state.values?.parentId ?? ''}>
+            <option value="">Select…</option>
+            {parents.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
               </option>
-              {parents.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </FormSelect>
-            {e.parent_id ? <p className="text-xs text-danger">{e.parent_id}</p> : null}
-          </div>
-        ) : null}
-        <label className="flex items-center gap-2 self-end pb-2 text-sm">
-          <input type="hidden" name="is_active" value="false" />
-          <input type="checkbox" name="is_active" value="true" defaultChecked={initial?.is_active ?? true} className="size-4" />
-          Active
-        </label>
+            ))}
+          </FormSelect>
+        </div>
+      ) : null}
+      <div className="grid grid-cols-[8rem_1fr] gap-2">
+        <div className="space-y-1">
+          <Label htmlFor={`${key}-code`}>Code</Label>
+          <Input id={`${key}-code`} name="code" required maxLength={32} defaultValue={state.values?.code ?? initial?.code ?? ''} />
+          <FieldError message={e.code} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={`${key}-name`}>Name</Label>
+          <Input id={`${key}-name`} name="name" required maxLength={120} defaultValue={state.values?.name ?? initial?.name ?? ''} />
+          <FieldError message={e.name} />
+        </div>
       </div>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="isActive" defaultChecked={initial?.isActive ?? true} className="size-4" />
+        Active
+      </label>
       <Button type="submit" size="sm" disabled={pending}>
         {initial ? 'Save' : 'Add'}
       </Button>

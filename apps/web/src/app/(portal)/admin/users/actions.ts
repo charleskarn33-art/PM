@@ -1,115 +1,83 @@
 'use server';
 
-import { isUuid, validateInvite, type AppRole, type FieldErrors, type InviteInput } from '@ipt/shared';
-import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireCapability } from '@/lib/auth';
-import { formValues, type FormValues } from '@/lib/form-values';
-import { createAdminClient } from '@/lib/supabase/admin';
-import { createClient } from '@/lib/supabase/server';
-import { siteUrl } from '@/lib/site-url';
+import { ApiError } from '@/lib/api/client';
+import { api } from '@/lib/api/server';
+import { requirePermission } from '@/lib/auth';
+import { fieldErrorsOf, messageOf, submit, text, type FormState } from '@/lib/form-action';
+import { formValues } from '@/lib/form-values';
 
-export interface UserFormState {
-  error?: string;
-  success?: string;
+const list = (formData: FormData, key: string) => formData.getAll(key).map(String).filter(Boolean);
+
+export async function createUser(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requirePermission('users.manage');
+  let id: string;
+  try {
+    id = (
+      await api<{ id: string }>('/users', {
+        body: {
+          email: text(formData, 'email') ?? '',
+          fullName: text(formData, 'fullName') ?? '',
+          phone: text(formData, 'phone', true),
+          employeeCode: text(formData, 'employeeCode', true),
+          roles: list(formData, 'roles'),
+          homeRegionId: text(formData, 'homeRegionId', true),
+          regionScopeIds: list(formData, 'regionScopeIds'),
+        },
+      })
+    ).data.id;
+  } catch (e) {
+    return { error: messageOf(e), fieldErrors: e instanceof ApiError ? fieldErrorsOf(e) : undefined, values: formValues(formData) };
+  }
+  const temporaryPassword = String(formData.get('temporaryPassword') ?? '');
+  if (temporaryPassword) {
+    try {
+      await api(`/users/${id}/temporary-password`, { body: { temporaryPassword } });
+    } catch (e) {
+      // The account exists; the password can be set again from its page.
+      redirect(`/admin/users/${id}?created=1&passwordError=${encodeURIComponent(messageOf(e))}`);
+    }
+  }
+  redirect(`/admin/users/${id}?created=1`);
 }
 
-const SCOPED_ROLES: readonly AppRole[] = ['regional_manager', 'regional_supervisor'];
+const at = (id: string) => [`/admin/users/${id}`, '/admin/users'];
 
-export async function updateUserAccess(_prev: UserFormState, formData: FormData): Promise<UserFormState> {
-  await requireCapability('manage_users');
-  const userId = String(formData.get('user_id') ?? '');
-  const role = String(formData.get('role') ?? '') as AppRole;
-  const isActive = formData.get('is_active') === 'true';
-  const regionId = String(formData.get('region_id') ?? '') || null;
-  const scopes = formData.getAll('scope_region_ids').map(String).filter(isUuid);
-  if (!isUuid(userId)) return { error: 'Invalid user.' };
-  if (regionId && !isUuid(regionId)) return { error: 'Invalid region.' };
-
-  const supabase = await createClient();
-  const { error } = await supabase.rpc('admin_update_user', {
-    p_user_id: userId,
-    p_role: role,
-    p_is_active: isActive,
-    p_region_id: regionId ?? undefined,
-  });
-  if (error) return { error: `Unable to update access: ${error.message}` };
-
-  const { error: scopeError } = await supabase.rpc('admin_set_region_scopes', {
-    p_user_id: userId,
-    p_region_ids: SCOPED_ROLES.includes(role) ? scopes : [],
-  });
-  if (scopeError) return { error: `Access saved, but region scope failed: ${scopeError.message}` };
-
-  revalidatePath('/admin/users');
-  revalidatePath(`/admin/users/${userId}`);
-  return { success: 'Access updated.' };
+export async function updateUser(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requirePermission('users.manage');
+  const id = text(formData, 'id') ?? '';
+  return submit(
+    formData,
+    () =>
+      api(`/users/${id}`, {
+        method: 'PATCH',
+        body: { fullName: text(formData, 'fullName'), phone: text(formData, 'phone', true), employeeCode: text(formData, 'employeeCode', true), homeRegionId: text(formData, 'homeRegionId', true) },
+      }),
+    'Details saved.',
+    at(id),
+  );
 }
 
-export async function updateRoleDetails(_prev: UserFormState, formData: FormData): Promise<UserFormState> {
-  await requireCapability('manage_users');
-  const userId = String(formData.get('user_id') ?? '');
-  const kind = String(formData.get('kind') ?? '');
-  const employeeCode = String(formData.get('employee_code') ?? '').trim() || null;
-  if (!isUuid(userId)) return { error: 'Invalid user.' };
-  const supabase = await createClient();
-
-  let error;
-  if (kind === 'technician') {
-    const supervisorId = String(formData.get('supervisor_id') ?? '') || null;
-    const regionId = String(formData.get('technician_region_id') ?? '') || null;
-    ({ error } = await supabase
-      .from('technicians')
-      .update({ employee_code: employeeCode, supervisor_id: supervisorId, region_id: regionId })
-      .eq('id', userId));
-  } else if (kind === 'supervisor') {
-    ({ error } = await supabase.from('supervisors').update({ employee_code: employeeCode }).eq('id', userId));
-  } else {
-    return { error: 'Unknown details type.' };
-  }
-  if (error) {
-    if (error.code === '23505') return { error: 'This employee code is already in use.' };
-    return { error: `Unable to save details: ${error.message}` };
-  }
-  revalidatePath(`/admin/users/${userId}`);
-  return { success: 'Details saved.' };
+export async function setRoles(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requirePermission('users.manage');
+  const id = text(formData, 'id') ?? '';
+  return submit(formData, () => api(`/users/${id}/roles`, { method: 'PUT', body: { roles: list(formData, 'roles') } }), 'Roles saved.', at(id));
 }
 
-export interface InviteState {
-  error?: string;
-  fieldErrors?: FieldErrors<keyof InviteInput>;
-  values?: FormValues;
+export async function setRegions(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requirePermission('users.manage');
+  const id = text(formData, 'id') ?? '';
+  return submit(formData, () => api(`/users/${id}/region-scopes`, { method: 'PUT', body: { regionIds: list(formData, 'regionIds') } }), 'Regions saved.', at(id));
 }
 
-export async function inviteUser(_prev: InviteState, formData: FormData): Promise<InviteState> {
-  await requireCapability('manage_users');
-  const values = formValues(formData);
-  const result = validateInvite(values);
-  if (!result.ok) return { error: 'Please correct the highlighted fields.', fieldErrors: result.errors, values };
-  const { email, full_name, role, region_id } = result.value;
-
-  const admin = createAdminClient();
-  if (!admin) return { error: 'Invitations are not configured: set SUPABASE_SECRET_KEY on the server.', values };
-
-  const redirectTo = `${await siteUrl()}/auth/confirm?next=/auth/set-password`;
-  const { data, error } = await admin.auth.admin.inviteUserByEmail(email, { data: { full_name }, redirectTo });
-  if (error) {
-    return /already/i.test(error.message)
-      ? { fieldErrors: { email: 'A user with this email already exists.' }, values }
-      : { error: `Unable to send the invitation: ${error.message}`, values };
+export async function accountStep(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requirePermission('users.manage');
+  const id = text(formData, 'id') ?? '';
+  const step = text(formData, 'step');
+  if (step === 'temporary-password') {
+    return submit(formData, () => api(`/users/${id}/temporary-password`, { body: { temporaryPassword: String(formData.get('temporaryPassword') ?? '') } }), 'Temporary password set. Every session of this user was signed out; they must choose a new password at their next sign-in.', at(id));
   }
-
-  // Assign role and activate as the signed-in admin so the change is audited.
-  const supabase = await createClient();
-  const { error: roleError } = await supabase.rpc('admin_update_user', {
-    p_user_id: data.user.id,
-    p_role: role,
-    p_is_active: true,
-    p_region_id: region_id ?? undefined,
-  });
-  if (roleError) {
-    return { error: `Invitation sent, but assigning the role failed: ${roleError.message}. Edit the user to retry.` };
-  }
-  revalidatePath('/admin/users');
-  redirect(`/admin/users/${data.user.id}?invited=1`);
+  if (step !== 'activate' && step !== 'deactivate' && step !== 'unlock') return { error: 'Unknown step.' };
+  const done = { activate: 'Account activated.', deactivate: 'Account deactivated and signed out everywhere.', unlock: 'Sign-in unlocked.' }[step];
+  return submit(formData, () => api(`/users/${id}/${step}`, { method: 'POST' }), done, at(id));
 }

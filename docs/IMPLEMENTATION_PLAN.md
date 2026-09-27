@@ -263,6 +263,45 @@ a written report, and **approval before the next phase**.
 - Web screens for failures and corrective actions come with the web
   dashboard (Phase 9); notifications (assignment, overdue) with Phase 12.
 
+**Phase 9 — Web dashboard.**
+- API: `GET /dashboard` (KPI summary), `GET /people` (technicians' and
+  supervisors' workload), `GET /search` (sites, failures, corrective actions,
+  people); the site list and detail carry an overview (technicians,
+  supervisor, last and next PM, open failures and actions) with filters by
+  supervisor, technician and PM state, and sorting.
+- Web fully on the API: dashboard; sites (list with filters and column
+  choice, detail with people and assignments, create and edit); technicians;
+  supervisors; PM schedule (list, plan a PM or a recurring series, change,
+  cancel); PM visits (list, detail with every answer, reading, photo, the
+  signature and the GPS result; approve or return); failures (list, detail
+  with timeline, photos and PDFs, comments, edit, close and reopen, report on
+  site); corrective actions (list, detail with every workflow step for the
+  person who may take it); administration (users with roles, regions,
+  activation, temporary passwords and unlock; organisation; PM templates with
+  versions, sections, questions, readings and consistency rules; settings);
+  global search in the header.
+- Navigation follows the API permissions. Analytics (Phase 10), Reports
+  (Phase 11), Notifications (Phase 12) and the Audit log (Phase 13) are shown
+  as not yet available instead of pages on the old backend.
+- Photos, signatures and attachments reach the browser through the web server
+  (`/files/…`, allow-listed paths only, the user's own session); the browser
+  never calls the API or holds its tokens. The Content-Security-Policy allows
+  this site only.
+- Supabase removed from the web: its client, data layer, pages, dependencies
+  (`@supabase/*`, and `@react-pdf/renderer` / `recharts` until Reports and
+  Analytics return) and environment variables. The web health check now
+  checks the API. The Supabase-era browser suite (`e2e/`) and the PostgREST
+  tests of the old web data layer were removed with it; an end-to-end suite
+  on the API comes with Phase 14. The archived Supabase database tests
+  (`supabase/tests`) remain as reference.
+- Verified: integration tests of the new endpoints, and a browser run
+  (Playwright, production build, real API on MySQL) as administrator,
+  supervisor, technician and maintenance user — dashboard figures, site
+  filters, creating a site, a user, a PM series and a failure, approving a
+  PM, a corrective action from creation to closure with a PDF, and the file
+  relay refusing what a user may not see (37 checks, no console or server
+  errors).
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).

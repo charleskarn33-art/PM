@@ -1,138 +1,160 @@
 'use server';
 
-import { isUuid, validateChecklistItem, validateReadingField, validateSection } from '@ipt/shared';
-import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireCapability } from '@/lib/auth';
-import { formValues, type FormValues } from '@/lib/form-values';
-import { createClient } from '@/lib/supabase/server';
+import { ApiError } from '@/lib/api/client';
+import { api } from '@/lib/api/server';
+import { requirePermission } from '@/lib/auth';
+import { fieldErrorsOf, messageOf, submit, text, type FormState } from '@/lib/form-action';
+import { formValues } from '@/lib/form-values';
 
-export interface TemplateFormState {
-  error?: string;
-  success?: string;
-  fieldErrors?: Record<string, string | undefined>;
-  values?: FormValues;
-}
+const bool = (fd: FormData, k: string) => fd.get(k) === 'on';
+const num = (fd: FormData, k: string) => {
+  const v = text(fd, k);
+  return v === undefined ? null : Number(v);
+};
+const lines = (fd: FormData, k: string) =>
+  String(fd.get(k) ?? '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+const failed = (e: unknown, fd: FormData): FormState => ({ error: messageOf(e), fieldErrors: e instanceof ApiError ? fieldErrorsOf(e) : undefined, values: formValues(fd) });
 
-function friendly(message: string): string {
-  if (/Retired template/.test(message)) return 'This template version is retired and read-only. Create a new version to make changes.';
-  if (/duplicate key/.test(message)) return 'This code is already used in this section.';
-  return message;
-}
-
-export async function cloneTemplate(formData: FormData): Promise<void> {
-  await requireCapability('manage_templates');
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc('admin_clone_template', { p_template_id: String(formData.get('template_id')) });
-  if (error) throw new Error(`Unable to create a new version: ${error.message}`);
-  revalidatePath('/admin/templates');
-  redirect(`/admin/templates/${data}`);
-}
-
-export async function activateTemplate(formData: FormData): Promise<void> {
-  await requireCapability('manage_templates');
-  const id = String(formData.get('template_id'));
-  const supabase = await createClient();
-  const { error } = await supabase.rpc('admin_activate_template', { p_template_id: id });
-  if (error) throw new Error(`Unable to activate: ${error.message}`);
-  revalidatePath('/admin/templates');
-  revalidatePath(`/admin/templates/${id}`);
-}
-
-export async function saveItem(_prev: TemplateFormState, formData: FormData): Promise<TemplateFormState> {
-  await requireCapability('manage_templates');
-  const values = formValues(formData);
-  const { template_id: templateId, section_id: sectionId, id } = values;
-  const result = validateChecklistItem(values);
-  if (!result.ok) return { error: 'Please correct the highlighted fields.', fieldErrors: result.errors, values };
-  if (!isUuid(sectionId) || !isUuid(templateId)) return { error: 'Invalid section.', values };
-
-  const supabase = await createClient();
-  if (id) {
-    const { error } = await supabase.from('pm_checklist_items').update(result.value).eq('id', id);
-    if (error) return { error: `Unable to save: ${friendly(error.message)}`, values };
-  } else {
-    const { data: last } = await supabase
-      .from('pm_checklist_items')
-      .select('sort_order')
-      .eq('section_id', sectionId)
-      .order('sort_order', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const { error } = await supabase
-      .from('pm_checklist_items')
-      .insert({ ...result.value, section_id: sectionId, sort_order: (last?.sort_order ?? 0) + 1 });
-    if (error) return { error: `Unable to add: ${friendly(error.message)}`, values };
+export async function createTemplate(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requirePermission('pm_templates.manage');
+  let id: string;
+  try {
+    id = (await api<{ id: string }>('/pm-templates', { body: { code: text(fd, 'code') ?? '', name: text(fd, 'name') ?? '', description: text(fd, 'description', true) } })).data.id;
+  } catch (e) {
+    return failed(e, fd);
   }
-  revalidatePath(`/admin/templates/${templateId}`);
-  redirect(`/admin/templates/${templateId}#section-${sectionId}`);
+  redirect(`/admin/templates/${id}`);
 }
 
-export async function saveReading(_prev: TemplateFormState, formData: FormData): Promise<TemplateFormState> {
-  await requireCapability('manage_templates');
-  const values = formValues(formData);
-  const { template_id: templateId, section_id: sectionId, id } = values;
-  const result = validateReadingField(values);
-  if (!result.ok) return { error: 'Please correct the highlighted fields.', fieldErrors: result.errors, values };
-  if (!isUuid(sectionId) || !isUuid(templateId)) return { error: 'Invalid section.', values };
-
-  const supabase = await createClient();
-  if (id) {
-    const { error } = await supabase.from('pm_reading_fields').update(result.value).eq('id', id);
-    if (error) return { error: `Unable to save: ${friendly(error.message)}`, values };
-  } else {
-    const { data: last } = await supabase
-      .from('pm_reading_fields')
-      .select('sort_order')
-      .eq('section_id', sectionId)
-      .order('sort_order', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const { error } = await supabase
-      .from('pm_reading_fields')
-      .insert({ ...result.value, section_id: sectionId, sort_order: (last?.sort_order ?? 0) + 1 });
-    if (error) return { error: `Unable to add: ${friendly(error.message)}`, values };
+/** Version steps on a template: `new-version`, `activate`, `delete`, `save` (name / description). */
+export async function templateStep(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requirePermission('pm_templates.manage');
+  const id = text(fd, 'id') ?? '';
+  const step = text(fd, 'step');
+  if (step === 'new-version') {
+    let draft: string;
+    try {
+      draft = (await api<{ id: string }>(`/pm-templates/${id}/new-version`, { method: 'POST' })).data.id;
+    } catch (e) {
+      return failed(e, fd);
+    }
+    redirect(`/admin/templates/${draft}`);
   }
-  revalidatePath(`/admin/templates/${templateId}`);
-  redirect(`/admin/templates/${templateId}#section-${sectionId}`);
+  if (step === 'delete') {
+    try {
+      await api(`/pm-templates/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      return failed(e, fd);
+    }
+    redirect('/admin/templates');
+  }
+  if (step === 'activate') return submit(fd, () => api(`/pm-templates/${id}/activate`, { method: 'POST' }), 'Version activated. Open schedules now use it; visits keep the version they started on.', ['/admin/templates', `/admin/templates/${id}`]);
+  if (step === 'save') return submit(fd, () => api(`/pm-templates/${id}`, { method: 'PATCH', body: { name: text(fd, 'name'), description: text(fd, 'description', true) } }), 'Saved.', [`/admin/templates/${id}`]);
+  return { error: 'Unknown step.' };
 }
 
-export async function saveSection(_prev: TemplateFormState, formData: FormData): Promise<TemplateFormState> {
-  await requireCapability('manage_templates');
-  const values = formValues(formData);
-  const result = validateSection(values);
-  if (!result.ok) return { error: result.errors.name, values };
-  const supabase = await createClient();
-  const { error } = await supabase.from('pm_sections').update(result.value).eq('id', values.id ?? '');
-  if (error) return { error: `Unable to save: ${friendly(error.message)}`, values };
-  revalidatePath(`/admin/templates/${values.template_id}`);
-  return { success: 'Section saved.' };
+export async function saveSection(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requirePermission('pm_templates.manage');
+  const templateId = text(fd, 'templateId') ?? '';
+  const id = text(fd, 'id');
+  if (text(fd, 'op') === 'delete' && id) return submit(fd, () => api(`/pm-sections/${id}`, { method: 'DELETE' }), 'Section removed.', [`/admin/templates/${templateId}`]);
+  const body = {
+    code: text(fd, 'code') ?? '',
+    name: text(fd, 'name') ?? '',
+    category: text(fd, 'category'),
+    sortOrder: num(fd, 'sortOrder') ?? 0,
+    description: text(fd, 'description', true),
+    allowNotApplicable: bool(fd, 'allowNotApplicable'),
+    requiresEquipment: text(fd, 'requiresEquipment', true),
+    isActive: id ? bool(fd, 'isActive') : true,
+  };
+  return submit(fd, () => api(id ? `/pm-sections/${id}` : `/pm-templates/${templateId}/sections`, { method: id ? 'PATCH' : 'POST', body }), id ? 'Section saved.' : 'Section added.', [`/admin/templates/${templateId}`]);
 }
 
-/** Swap an item (or reading) with its neighbour to reorder. */
-export async function moveEntry(formData: FormData): Promise<void> {
-  await requireCapability('manage_templates');
-  const table = formData.get('kind') === 'reading' ? 'pm_reading_fields' : 'pm_checklist_items';
-  const id = String(formData.get('id'));
-  const direction = formData.get('direction') === 'up' ? 'up' : 'down';
-  const templateId = String(formData.get('template_id'));
-  const supabase = await createClient();
+export async function saveItem(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requirePermission('pm_templates.manage');
+  const templateId = text(fd, 'templateId') ?? '';
+  const id = text(fd, 'id');
+  const sectionId = text(fd, 'sectionId') ?? '';
+  try {
+    if (text(fd, 'op') === 'delete' && id) {
+      await api(`/pm-items/${id}`, { method: 'DELETE' });
+    } else {
+      const body = {
+        code: text(fd, 'code') ?? '',
+        prompt: text(fd, 'prompt') ?? '',
+        helpText: text(fd, 'helpText', true),
+        responseType: text(fd, 'responseType'),
+        options: lines(fd, 'options'),
+        allowNotApplicable: bool(fd, 'allowNotApplicable'),
+        isRequired: bool(fd, 'isRequired'),
+        unit: text(fd, 'unit', true),
+        minValue: num(fd, 'minValue'),
+        maxValue: num(fd, 'maxValue'),
+        isInteger: bool(fd, 'isInteger'),
+        failureOnAnswer: text(fd, 'failureOnAnswer', true),
+        failureSeverity: text(fd, 'failureSeverity'),
+        requiresPhotoOnFailure: bool(fd, 'requiresPhotoOnFailure'),
+        requiresCommentOnFailure: bool(fd, 'requiresCommentOnFailure'),
+        photoOnAnswers: fd.getAll('photoOnAnswers').map(String),
+        commentOnAnswers: fd.getAll('commentOnAnswers').map(String),
+        photoInstructions: text(fd, 'photoInstructions', true),
+        analyticsKey: text(fd, 'analyticsKey', true),
+        sortOrder: num(fd, 'sortOrder') ?? 0,
+        isActive: bool(fd, 'isActive'),
+      };
+      await api(id ? `/pm-items/${id}` : `/pm-sections/${sectionId}/items`, { method: id ? 'PATCH' : 'POST', body });
+    }
+  } catch (e) {
+    return failed(e, fd);
+  }
+  redirect(`/admin/templates/${templateId}`);
+}
 
-  const { data: current, error } = await supabase.from(table).select('id, section_id, sort_order').eq('id', id).single();
-  if (error) throw new Error(error.message);
-  const neighbourQuery = supabase
-    .from(table)
-    .select('id, sort_order')
-    .eq('section_id', current.section_id)
-    .order('sort_order', { ascending: direction === 'down' })
-    .limit(1);
-  const { data: neighbour } = await (direction === 'up'
-    ? neighbourQuery.lt('sort_order', current.sort_order)
-    : neighbourQuery.gt('sort_order', current.sort_order)
-  ).maybeSingle();
-  if (!neighbour) return;
-  const first = await supabase.from(table).update({ sort_order: neighbour.sort_order }).eq('id', current.id);
-  const second = await supabase.from(table).update({ sort_order: current.sort_order }).eq('id', neighbour.id);
-  if (first.error || second.error) throw new Error(friendly((first.error ?? second.error)!.message));
-  revalidatePath(`/admin/templates/${templateId}`);
+export async function saveReadingField(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requirePermission('pm_templates.manage');
+  const templateId = text(fd, 'templateId') ?? '';
+  const id = text(fd, 'id');
+  const sectionId = text(fd, 'sectionId') ?? '';
+  try {
+    if (text(fd, 'op') === 'delete' && id) {
+      await api(`/pm-reading-fields/${id}`, { method: 'DELETE' });
+    } else {
+      const body = {
+        code: text(fd, 'code') ?? '',
+        label: text(fd, 'label') ?? '',
+        valueType: text(fd, 'valueType'),
+        unit: text(fd, 'unit', true),
+        isInteger: bool(fd, 'isInteger'),
+        minValue: num(fd, 'minValue'),
+        maxValue: num(fd, 'maxValue'),
+        options: lines(fd, 'options'),
+        isRequired: bool(fd, 'isRequired'),
+        helpText: text(fd, 'helpText', true),
+        analyticsKey: text(fd, 'analyticsKey', true),
+        sortOrder: num(fd, 'sortOrder') ?? 0,
+        isActive: bool(fd, 'isActive'),
+      };
+      await api(id ? `/pm-reading-fields/${id}` : `/pm-sections/${sectionId}/reading-fields`, { method: id ? 'PATCH' : 'POST', body });
+    }
+  } catch (e) {
+    return failed(e, fd);
+  }
+  redirect(`/admin/templates/${templateId}`);
+}
+
+export async function saveRule(_prev: FormState, fd: FormData): Promise<FormState> {
+  await requirePermission('pm_templates.manage');
+  const id = text(fd, 'id');
+  if (id) return submit(fd, () => api(`/pm-consistency-rules/${id}`, { method: 'PATCH', body: { isActive: text(fd, 'isActive') === 'true' } }), 'Rule saved.', ['/admin/templates']);
+  return submit(
+    fd,
+    () => api('/pm-consistency-rules', { body: { lhsKey: text(fd, 'lhsKey') ?? '', operator: text(fd, 'operator'), rhsKey: text(fd, 'rhsKey') ?? '', message: text(fd, 'message') ?? '' } }),
+    'Rule added.',
+    ['/admin/templates'],
+  );
 }

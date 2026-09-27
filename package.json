@@ -19,7 +19,6 @@
     "db:types": "node scripts/gen-db-types.mjs",
     "db:types:check": "node scripts/gen-db-types.mjs --check",
     "tools:postgrest": "./scripts/fetch-postgrest.sh",
-    "test:e2e": "pnpm --filter @ipt/e2e run e2e",
     "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev && prisma generate",

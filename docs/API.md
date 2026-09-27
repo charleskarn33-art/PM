@@ -70,8 +70,12 @@ Access tokens last `JWT_ACCESS_TTL` (15 min), refresh tokens `JWT_REFRESH_TTL`
 | POST / PATCH | `/regions`, `/regions/:id` | `org.manage` |
 | POST / PATCH | `/clusters`, `/clusters/:id` | `org.manage` |
 | POST / PATCH | `/counties`, `/counties/:id` | `org.manage` |
-| GET | `/sites?q&regionId&clusterId&countyId&status` | `sites.read` (scoped) |
+| GET | `/sites?q&regionId&clusterId&countyId&status&supervisorId&technicianId&pm&sort&dir` | `sites.read` (scoped) — `q` matches site ID, name or county; `pm` = `overdue` / `scheduled` / `none`; `sort` = `siteCode` / `siteName` / `region` / `status` |
 | GET | `/sites/:id` | `sites.read` (scoped) |
+
+Each site in the list and the detail carries `overview`: active technicians
+and supervisor, `lastPmAt` (last completed PM), `nextPm` (earliest open
+schedule: due date and status), `openFailures` and `openActions`.
 | POST / PATCH | `/sites`, `/sites/:id` | `sites.manage` — includes `batteryUnitCount` (batteries in the bank; each PM then records every battery) |
 
 ## Site assignments
@@ -205,6 +209,16 @@ not count. It can also be closed by hand with a note, and reopened.
 A step not possible from the current status is refused with 409
 `INVALID_TRANSITION`. Every step, comment and change is kept on the failure's
 timeline with who and when.
+
+## Dashboard, people and search
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/dashboard` | `analytics.read` (scoped) — sites (total, active, demo); PM due and completed this month (organisation time zone) with the completion rate (completed ÷ due, null when nothing is due), overdue, in progress, waiting for review, returned; open failures by severity and by PM section, new in 30 days; corrective actions active, overdue, waiting for verification; the latest completed PMs and open failures |
+| GET | `/people?role=TECHNICIAN\|REGIONAL_SUPERVISOR&q&regionId` | `users.read` (scoped) — technicians with assigned sites, open and overdue PMs, PMs completed in 30 days, last PM, open and overdue corrective actions; supervisors with supervised sites, sites in their regions, PMs waiting for review, open failures and actions waiting for verification |
+| GET | `/search?q=` | signed in — up to 5 each of sites, failures (title or `FL-…`), corrective actions (title or `CA-…`) and people (with `users.read`), within the caller's scope and permissions |
+
+Every figure is counted from the records in the database; nothing is estimated.
 
 ## Field pack (offline data for the phone)
 

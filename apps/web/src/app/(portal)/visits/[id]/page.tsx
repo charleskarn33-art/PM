@@ -1,162 +1,241 @@
-import {
-  can,
-  FAILURE_STATUS_TONE,
-  formatDistance,
-  humanizeStatus,
-  ISSUE_LABELS,
-  isFailure,
-  PM_CATEGORY_LABELS,
-  PM_STATUS_TONE,
-  SEVERITY_TONE,
-  visitProgress,
-  type Tables,
-} from '@ipt/shared';
-import { Camera, FileDown, MessageSquare } from 'lucide-react';
+import { PM_STATUS_TONE } from '@ipt/shared';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
-import { PhotoThumbs } from '@/components/photo-thumbs';
-import { SectionSummary } from '@/components/section-summary';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { requireRole } from '@/lib/auth';
-import { loadVisitDetail, signPhotoUrls } from '@/lib/pm-visit';
-import { createClient } from '@/lib/supabase/server';
-import { cn } from '@/lib/utils';
+import { load } from '@/lib/api/data';
+import type { PmStatus } from '@/lib/api/types';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { formatDate, formatDateTime } from '@/lib/format';
 import { ReviewForm } from './review-form';
 
 export const metadata: Metadata = { title: 'PM visit' };
-const when = (v: string | null) => (v ? new Date(v).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
-function formatValue(item: Tables<'pm_checklist_items'>, r: Tables<'pm_responses'> | undefined): string | null {
-  if (!r) return null;
-  if (item.response_type === 'YES_NO_NA') return null;
-  if (r.answer === 'N/A') return 'N/A';
-  switch (item.response_type) {
-    case 'NUMBER':
-      return r.numeric_value == null ? null : `${r.numeric_value}${item.unit ? ` ${item.unit}` : ''}`;
-    case 'MULTI_SELECT':
-      return r.selected_options?.join(', ') ?? null;
-    case 'DATE':
-      return r.date_value;
-    case 'DATETIME':
-      return r.datetime_value ? when(r.datetime_value) : null;
-    default:
-      return r.text_value;
-  }
+interface Item {
+  id: string;
+  code: string;
+  prompt: string;
+  responseType: string;
+  unit: string | null;
+  isRequired: boolean;
+}
+interface Field {
+  id: string;
+  label: string;
+  unit: string | null;
+}
+interface Response {
+  checklistItemId: string;
+  answer: 'YES' | 'NO' | 'NA' | null;
+  numericValue: number | null;
+  textValue: string | null;
+  selectedOptions: string[] | null;
+  dateValue: string | null;
+  datetimeValue: string | null;
+  comment: string | null;
+  isFailure: boolean;
+}
+type Num = number | null;
+interface Visit {
+  id: string;
+  status: PmStatus;
+  startedAt: string;
+  completedAt: string | null;
+  completionPct: number;
+  failureCount: number;
+  notApplicableSections: string[];
+  overallComments: string | null;
+  reviewComments: string | null;
+  reviewedAt: string | null;
+  reviewedBy: { fullName: string } | null;
+  technicianId: string;
+  isDemo: boolean;
+  gpsStatus: string | null;
+  gpsDistanceM: Num;
+  gpsRadiusM: Num;
+  gpsAccuracyM: Num;
+  geofenceMode: string | null;
+  outsideRadiusReason: string | null;
+  site: { id: string; siteCode: string; siteName: string };
+  technician: { fullName: string };
+  template: { name: string; version: number };
+  schedule: { id: string; dueDate: string } | null;
+  sections: { id: string; code: string; name: string; items: Item[]; readingFields: Field[] }[];
+  responses: Response[];
+  readings: { readingFieldId: string; numericValue: Num; textValue: string | null }[];
+  photos: { id: string; checklistItemId: string | null; caption: string | null; createdAt: string }[];
+  signature: { signedAt: string; signedName: string | null } | null;
+  progress: { sections: { code: string; required: number; done: number; failures: number; notApplicable: boolean }[] };
+  issues: { sectionCode: string; kind: string; label: string }[];
+  modules: {
+    dc: { dcPowerKw: Num; totalPhaseCurrentA: Num; rectifierVoltageV: Num; loadCurrentA: Num } | null;
+    battery: { batteryVoltageV: Num; unitsRecorded: number; minUnitVoltageV: Num; maxUnitVoltageV: Num; units: { unitNumber: number; voltageV: number }[] } | null;
+    generator: { runningHours: Num; fuelLevelPct: Num; generatorKva: Num; oilPressure: string | null } | null;
+  };
 }
 
-export default async function VisitPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  const session = await requireRole(['super_admin', 'regional_manager', 'regional_supervisor', 'viewer']);
-  const supabase = await createClient();
-  const detail = await loadVisitDetail(supabase, id);
-  if (!detail) notFound();
-  const { visit, raw, sections, items, readingFields, responses, readings, photoCounts, photos, issues, state, analytics, dcThresholds } = detail;
-  const [photoUrls, raised] = await Promise.all([
-    signPhotoUrls(supabase, photos),
-    supabase.from('failure_overview').select('id, failure_number, status, severity, item_prompt, open_action_count').eq('visit_id', id).order('failure_number'),
-  ]);
-  if (raised.error) throw new Error(`Unable to load failures: ${raised.error.message}`);
-  const failures = raised.data ?? [];
-  const photosFor = (itemId: string) => photos.filter((p) => p.checklist_item_id === itemId);
+function answerText(item: Item, r: Response | undefined): string {
+  if (!r) return '—';
+  if (r.answer === 'NA') return 'N/A';
+  if (r.answer) return r.answer === 'YES' ? 'Yes' : 'No';
+  if (r.numericValue != null) return `${r.numericValue}${item.unit ? ` ${item.unit}` : ''}`;
+  if (r.textValue) return r.textValue;
+  if (r.selectedOptions?.length) return r.selectedOptions.join(', ');
+  if (r.dateValue) return formatDate(r.dateValue);
+  if (r.datetimeValue) return formatDateTime(r.datetimeValue);
+  return '—';
+}
 
-  const progress = visitProgress(state);
-  const responseBy = new Map(responses.map((r) => [r.checklist_item_id, r]));
-  const readingBy = new Map(readings.map((r) => [r.reading_field_id, r]));
-  const issueBy = new Map<string, string[]>();
-  for (const i of issues) issueBy.set(i.refId, [...(issueBy.get(i.refId) ?? []), ISSUE_LABELS[i.issue]]);
-  const na = new Set(raw.not_applicable_sections);
-  const canReview = can(session.role, 'review_pm') && visit.status === 'SUBMITTED';
+const GPS_TEXT: Record<string, string> = {
+  WITHIN_RADIUS: 'Within the site radius',
+  OUTSIDE_RADIUS: 'Outside the site radius',
+  UNAVAILABLE: 'Location unavailable',
+  SITE_HAS_NO_COORDINATES: 'Site has no coordinates',
+};
+
+const DONE: Record<string, string> = { approved: 'PM approved.', returned: 'PM returned to the technician for correction.' };
+
+export default async function VisitPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ done?: string }> }) {
+  const { id } = await params;
+  const { done } = await searchParams;
+  const session = await requirePermission('pm_visits.read');
+  const v = await load<Visit>(`/visits/${id}`);
+  const responses = new Map(v.responses.map((r) => [r.checklistItemId, r]));
+  const readings = new Map(v.readings.map((r) => [r.readingFieldId, r]));
+  const canReview = v.status === 'COMPLETED' && hasPermission(session, 'pm_visits.review') && v.technicianId !== session.userId;
+  const photosOf = (itemId: string | null) => v.photos.filter((p) => p.checklistItemId === itemId);
+  const kw = v.modules.dc?.dcPowerKw;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`${visit.site_code} · ${visit.site_name}`}
-        description={
-          <span className="flex flex-wrap items-center gap-2">
-            PM by {visit.technician_name}
-            <StatusBadge status={visit.status!} tone={PM_STATUS_TONE[visit.status!]} />
-            {visit.is_demo ? <Badge>Demo data</Badge> : null}
-          </span>
-        }
-        actions={
-          <div className="flex gap-2">
-            {/* A route handler, not a page: plain anchors avoid client-side navigation. */}
-            <a href={`/visits/${id}/report`} target="_blank" rel="noreferrer" className={buttonVariants()}>
-              <FileDown aria-hidden />
-              PDF report
-            </a>
-            <Link href={`/sites/${visit.site_id}`} className={buttonVariants({ variant: 'outline' })}>
-              Site
-            </Link>
-          </div>
-        }
+        title={`PM — ${v.site.siteCode} · ${v.site.siteName}`}
+        description={`${v.template.name} v${v.template.version} · ${v.technician.fullName}`}
+        actions={<StatusBadge status={v.status === 'COMPLETED' ? 'WAITING_FOR_REVIEW' : v.status} tone={PM_STATUS_TONE[v.status]} />}
       />
+      {done && DONE[done] ? <Alert tone="success">{DONE[done]}</Alert> : null}
+      {v.isDemo ? <Alert tone="info">Demo data seeded from the Tienii 1301 reference report — not a live PM.</Alert> : null}
+      {v.status === 'REJECTED' && v.reviewComments ? <Alert tone="danger">Returned for correction: {v.reviewComments}</Alert> : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {[
-          ['Completion', `${visit.completion_pct}%`],
-          ['Failures', String(visit.failure_count)],
-          ['Started', when(visit.started_at)],
-          ['Submitted', when(visit.submitted_at)],
-          ['Photos', String(photos.length)],
-        ].map(([label, value]) => (
-          <Card key={label} className="p-4">
-            <p className="text-xs text-muted-foreground">{label}</p>
-            <p className={cn('mt-1 font-semibold', label === 'Failures' && Number(value) > 0 && 'text-danger')}>{value}</p>
-          </Card>
-        ))}
-      </div>
-
-      <GpsCheckIn visit={raw} />
-
-      {visit.reviewed_at && (visit.status === 'APPROVED' || visit.status === 'REJECTED') ? (
-        <Alert tone={visit.status === 'REJECTED' ? 'danger' : 'success'}>
-          <strong>
-            {visit.status === 'APPROVED' ? 'Approved' : 'Rejected'} by {visit.reviewed_by_name ?? 'supervisor'}
-          </strong>{' '}
-          on {when(visit.reviewed_at)}
-          {visit.review_comments ? `: ${visit.review_comments}` : '.'}
-        </Alert>
-      ) : visit.review_comments ? (
-        <Alert tone="info">Previous review: {visit.review_comments}</Alert>
-      ) : null}
-
-      {issues.length > 0 && visit.status !== 'APPROVED' ? (
-        <Alert tone="warning">
-          {issues.length} item{issues.length === 1 ? '' : 's'} still incomplete (answers, comments or photos). The technician cannot
-          submit until they are resolved.
-        </Alert>
-      ) : null}
-
-      {failures.length > 0 ? (
+      <div className="grid gap-6 lg:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle>Failures raised by this PM</CardTitle>
+            <CardTitle className="text-base">Visit</CardTitle>
           </CardHeader>
           <CardContent>
-            <ul className="divide-y">
-              {failures.map((f) => (
-                <li key={f.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-                  <span>
-                    <Link href={`/failures/${f.id}`} className="font-medium hover:underline">
-                      {f.failure_number}
-                    </Link>{' '}
-                    {f.item_prompt}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    {f.open_action_count ? <span className="text-muted-foreground">{f.open_action_count} open action(s)</span> : null}
-                    <StatusBadge status={f.severity!} tone={SEVERITY_TONE[f.severity!]} />
-                    <StatusBadge status={f.status!} tone={FAILURE_STATUS_TONE[f.status!]} />
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">Started</dt>
+              <dd>{formatDateTime(v.startedAt)}</dd>
+              <dt className="text-muted-foreground">Completed</dt>
+              <dd>{formatDateTime(v.completedAt)}</dd>
+              <dt className="text-muted-foreground">Completion</dt>
+              <dd>{Math.floor(v.completionPct)}%</dd>
+              <dt className="text-muted-foreground">Failures</dt>
+              <dd>
+                {v.failureCount ? (
+                  <Link href={`/failures?visit=${v.id}`} className="text-danger hover:underline">
+                    {v.failureCount} recorded
+                  </Link>
+                ) : (
+                  'None'
+                )}
+              </dd>
+              {v.schedule ? (
+                <>
+                  <dt className="text-muted-foreground">Scheduled PM</dt>
+                  <dd>
+                    <Link href={`/schedule/${v.schedule.id}`} className="hover:underline">
+                      Due {formatDate(v.schedule.dueDate)}
+                    </Link>
+                  </dd>
+                </>
+              ) : null}
+              {v.reviewedAt ? (
+                <>
+                  <dt className="text-muted-foreground">Reviewed</dt>
+                  <dd>
+                    {formatDateTime(v.reviewedAt)} by {v.reviewedBy?.fullName ?? '—'}
+                  </dd>
+                </>
+              ) : null}
+            </dl>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Location at start</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p>
+              <Badge tone={v.gpsStatus === 'WITHIN_RADIUS' ? 'success' : v.gpsStatus === 'OUTSIDE_RADIUS' ? 'warning' : 'neutral'}>{GPS_TEXT[v.gpsStatus ?? ''] ?? 'Not recorded'}</Badge>
+            </p>
+            {v.gpsDistanceM != null ? (
+              <p>
+                {Math.round(v.gpsDistanceM)} m from the site (allowed {v.gpsRadiusM} m{v.gpsAccuracyM != null ? `, GPS ±${Math.round(v.gpsAccuracyM)} m` : ''})
+              </p>
+            ) : null}
+            {v.geofenceMode ? <p className="text-muted-foreground">Rule at the time: {v.geofenceMode.replace('_', ' ').toLowerCase()}</p> : null}
+            {v.outsideRadiusReason ? <p>Reason given: {v.outsideRadiusReason}</p> : null}
+            <p className="text-xs text-muted-foreground">The position is as reported by the phone.</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Technician signature</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {v.signature ? (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element -- server-drawn SVG relayed from the API */}
+                <img src={`/files/visits/${v.id}/signature`} alt={`Signature of ${v.signature.signedName ?? v.technician.fullName}`} className="h-24 w-full rounded border bg-white object-contain" />
+                <p className="text-muted-foreground">
+                  {v.signature.signedName ?? '—'}, {formatDateTime(v.signature.signedAt)}
+                </p>
+              </>
+            ) : (
+              <p className="text-muted-foreground">Not signed.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {v.modules.dc || v.modules.battery || v.modules.generator ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Power summary</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4 text-sm md:grid-cols-3">
+            {v.modules.generator ? (
+              <div>
+                <p className="font-medium">Generator</p>
+                <p>Running hours: {v.modules.generator.runningHours ?? '—'}</p>
+                <p>Fuel: {v.modules.generator.fuelLevelPct != null ? `${v.modules.generator.fuelLevelPct}%` : '—'}</p>
+                <p>KVA: {v.modules.generator.generatorKva ?? '—'}</p>
+                <p>Oil pressure: {v.modules.generator.oilPressure ?? '—'}</p>
+              </div>
+            ) : null}
+            {v.modules.dc ? (
+              <div>
+                <p className="font-medium">DC system</p>
+                <p>Rectifier voltage: {v.modules.dc.rectifierVoltageV ?? '—'} V</p>
+                <p>Load current: {v.modules.dc.loadCurrentA ?? '—'} A</p>
+                <p>DC power: {kw != null ? `${kw} kW (calculated V × A)` : '—'}</p>
+              </div>
+            ) : null}
+            {v.modules.battery ? (
+              <div>
+                <p className="font-medium">Battery</p>
+                <p>Bank voltage: {v.modules.battery.batteryVoltageV ?? '—'} V</p>
+                {v.modules.battery.unitsRecorded ? (
+                  <p>
+                    {v.modules.battery.unitsRecorded} batteries: {v.modules.battery.minUnitVoltageV}–{v.modules.battery.maxUnitVoltageV} V
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
@@ -164,182 +243,97 @@ export default async function VisitPage({ params }: { params: Promise<{ id: stri
       {canReview ? (
         <Card>
           <CardHeader>
-            <CardTitle>Review</CardTitle>
+            <CardTitle className="text-base">Review</CardTitle>
           </CardHeader>
           <CardContent>
-            <ReviewForm visitId={id} />
+            <ReviewForm visitId={v.id} />
           </CardContent>
         </Card>
       ) : null}
 
-      {sections
-        .filter((s) => s.is_active)
-        .map((section) => {
-          const p = progress.sections.find((x) => x.code === section.code);
-          const sectionItems = items.filter((i) => i.section_id === section.id && i.is_active);
-          const sectionFields = readingFields.filter((f) => f.section_id === section.id && f.is_active);
-          return (
-            <Card key={section.id} className={cn(na.has(section.code) && 'opacity-70')}>
-              <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
-                <CardTitle>{section.name}</CardTitle>
-                <span className="flex items-center gap-2 text-sm">
-                  {na.has(section.code) ? (
-                    <Badge>Not applicable</Badge>
-                  ) : (
-                    <>
-                      <span className="text-muted-foreground">
-                        {p?.done ?? 0}/{p?.required ?? 0} required
-                      </span>
-                      {p?.failures ? <Badge tone="danger">{p.failures} failure(s)</Badge> : null}
-                    </>
-                  )}
-                </span>
-              </CardHeader>
-              {na.has(section.code) ? null : (
-                <CardContent className="space-y-4">
-                  {issues
-                    .filter((i) => i.issue === 'INCONSISTENT' && i.sectionCode === section.code)
-                    .map((i) => (
-                      <Alert key={i.refId} tone="warning">
-                        {i.label}
-                      </Alert>
-                    ))}
-                  {sectionFields.length > 0 ? (
-                    <dl className="grid gap-3 rounded-lg bg-muted/50 p-3 sm:grid-cols-2 lg:grid-cols-3">
-                      {sectionFields.map((f) => {
-                        const r = readingBy.get(f.id);
-                        const value = r ? (r.numeric_value ?? r.text_value) : null;
-                        return (
-                          <div key={f.id}>
-                            <dt className="text-xs text-muted-foreground">{f.label}</dt>
-                            <dd className={cn('font-semibold tabular-nums', value == null && f.is_required && 'text-warning')}>
-                              {value == null ? (f.is_required ? 'Missing' : '—') : `${value}${f.unit && r?.numeric_value != null ? ` ${f.unit}` : ''}`}
-                            </dd>
-                          </div>
-                        );
-                      })}
-                    </dl>
-                  ) : null}
-                  <SectionSummary category={section.category} analytics={analytics} dcThresholds={dcThresholds} />
-                  <PhotoThumbs
-                    photos={photos.filter((p) => !p.checklist_item_id && p.section_id === section.id)}
-                    urls={photoUrls}
-                    label={`${section.name} photos`}
-                  />
-                  <ul className="divide-y">
-                    {sectionItems.map((item) => {
-                      const r = responseBy.get(item.id);
-                      const failed = isFailure(item, r?.answer);
-                      const value = formatValue(item, r);
-                      const itemIssues = issueBy.get(item.id);
-                      return (
-                        <li key={item.id} className={cn('flex flex-col gap-1 py-2.5 sm:flex-row sm:items-start sm:justify-between', failed && 'bg-danger-soft/40 -mx-2 px-2 rounded')}>
-                          <div className="min-w-0">
-                            <p className="text-sm">
-                              {r?.prompt_snapshot ?? item.prompt}
-                              {!item.is_required ? <span className="ml-1 text-xs text-muted-foreground">(optional)</span> : null}
-                            </p>
-                            {r?.comment ? (
-                              <p className="mt-1 flex items-start gap-1 text-xs text-muted-foreground">
-                                <MessageSquare className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-                                {r.comment}
-                              </p>
-                            ) : null}
-                            {itemIssues ? <p className="mt-1 text-xs font-medium text-warning">{itemIssues.join(' · ')}</p> : null}
-                            {photoCounts[item.id] ? (
-                              <div className="mt-2">
-                                <PhotoThumbs photos={photosFor(item.id)} urls={photoUrls} label={`Photos for ${item.prompt}`} />
-                              </div>
-                            ) : null}
-                          </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            {photoCounts[item.id] ? (
-                              <span className="flex items-center gap-1 text-xs text-muted-foreground" title="Photos attached">
-                                <Camera className="size-3.5" aria-hidden />
-                                {photoCounts[item.id]}
-                              </span>
-                            ) : null}
-                            {item.response_type === 'YES_NO_NA' ? (
-                              r?.answer ? (
-                                <StatusBadge status={r.answer} tone={failed ? 'danger' : r.answer === 'N/A' ? 'neutral' : 'success'} />
-                              ) : (
-                                <span className="text-xs text-muted-foreground">Not answered</span>
-                              )
-                            ) : (
-                              <span className="text-sm font-medium tabular-nums">{value ?? <span className="text-xs text-muted-foreground">Not answered</span>}</span>
-                            )}
-                            {failed ? <StatusBadge status={item.failure_severity} tone={SEVERITY_TONE[item.failure_severity]} /> : null}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </CardContent>
-              )}
-            </Card>
-          );
-        })}
-
-      {raw.overall_comments ? (
+      {v.overallComments ? (
         <Card>
           <CardHeader>
-            <CardTitle>Overall comments</CardTitle>
+            <CardTitle className="text-base">Technician&apos;s comments</CardTitle>
           </CardHeader>
-          <CardContent>
-            <p className="text-sm">{raw.overall_comments}</p>
+          <CardContent className="whitespace-pre-wrap text-sm">{v.overallComments}</CardContent>
+        </Card>
+      ) : null}
+
+      {v.sections.map((s) => {
+        const na = v.notApplicableSections.includes(s.code);
+        const p = v.progress.sections.find((x) => x.code === s.code);
+        return (
+          <Card key={s.id}>
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
+              <CardTitle className="text-base">{s.name}</CardTitle>
+              {na ? <Badge tone="neutral">Not applicable</Badge> : <span className="text-sm text-muted-foreground">{p ? `${p.done} of ${p.required} required` : ''}{p?.failures ? ` · ${p.failures} failure${p.failures === 1 ? '' : 's'}` : ''}</span>}
+            </CardHeader>
+            {na ? null : (
+              <CardContent className="space-y-4">
+                {s.readingFields.length ? (
+                  <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2 lg:grid-cols-3">
+                    {s.readingFields.map((f) => {
+                      const r = readings.get(f.id);
+                      const value = r?.numericValue ?? r?.textValue;
+                      return (
+                        <div key={f.id} className="flex justify-between gap-2 border-b py-1">
+                          <dt className="text-muted-foreground">{f.label}</dt>
+                          <dd className="font-medium tabular-nums">{value == null ? '—' : `${value}${f.unit && r?.numericValue != null ? ` ${f.unit}` : ''}`}</dd>
+                        </div>
+                      );
+                    })}
+                  </dl>
+                ) : null}
+                <ul className="divide-y text-sm">
+                  {s.items.map((i) => {
+                    const r = responses.get(i.id);
+                    const photos = photosOf(i.id);
+                    return (
+                      <li key={i.id} className="space-y-1 py-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <span>{i.prompt}</span>
+                          <span className="flex shrink-0 items-center gap-2">
+                            {r?.isFailure ? <Badge tone="danger">Failure</Badge> : null}
+                            <span className="font-medium">{answerText(i, r)}</span>
+                          </span>
+                        </div>
+                        {r?.comment ? <p className="text-muted-foreground">Comment: {r.comment}</p> : null}
+                        {photos.length ? (
+                          <div className="flex flex-wrap gap-2">
+                            {photos.map((ph) => (
+                              <a key={ph.id} href={`/files/visits/${v.id}/photos/${ph.id}`} target="_blank" rel="noreferrer">
+                                {/* eslint-disable-next-line @next/next/no-img-element -- photos relayed from the API */}
+                                <img src={`/files/visits/${v.id}/photos/${ph.id}`} alt={ph.caption ?? `Photo for ${i.prompt}`} className="size-24 rounded border object-cover" loading="lazy" />
+                              </a>
+                            ))}
+                          </div>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </CardContent>
+            )}
+          </Card>
+        );
+      })}
+
+      {photosOf(null).length ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Other photos</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {photosOf(null).map((ph) => (
+              <a key={ph.id} href={`/files/visits/${v.id}/photos/${ph.id}`} target="_blank" rel="noreferrer">
+                {/* eslint-disable-next-line @next/next/no-img-element -- photos relayed from the API */}
+                <img src={`/files/visits/${v.id}/photos/${ph.id}`} alt={ph.caption ?? 'Visit photo'} className="size-24 rounded border object-cover" loading="lazy" />
+              </a>
+            ))}
           </CardContent>
         </Card>
       ) : null}
-      <p className="text-xs text-muted-foreground">
-        Template v{visit.template_version}. Sections: {sections.map((s) => PM_CATEGORY_LABELS[s.category]).join(' · ')}.
-      </p>
     </div>
-  );
-}
-
-/** GPS evidence recorded when the PM was started (computed by the server). */
-function GpsCheckIn({ visit }: { visit: Tables<'pm_visits'> }) {
-  const status = visit.gps_status;
-  if (!status) return null;
-  const tone = status === 'WITHIN_RADIUS' ? 'success' : status === 'SITE_HAS_NO_COORDINATES' ? 'info' : 'warning';
-  return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
-        <CardTitle>GPS check-in</CardTitle>
-        <StatusBadge status={status} tone={tone} />
-      </CardHeader>
-      <CardContent>
-        <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <dt className="text-xs text-muted-foreground">Position</dt>
-            <dd className="font-medium tabular-nums">
-              {visit.gps_latitude != null && visit.gps_longitude != null
-                ? `${visit.gps_latitude.toFixed(5)}, ${visit.gps_longitude.toFixed(5)}`
-                : 'Not captured'}
-              {visit.gps_accuracy_m != null ? <span className="text-muted-foreground"> (±{Math.round(visit.gps_accuracy_m)} m)</span> : null}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Distance from site</dt>
-            <dd className="font-medium tabular-nums">{formatDistance(visit.gps_distance_m)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Allowed radius · mode</dt>
-            <dd className="font-medium">
-              {visit.gps_radius_m != null ? `${visit.gps_radius_m} m` : '—'} · {visit.geofence_mode ? humanizeStatus(visit.geofence_mode) : '—'}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-muted-foreground">Captured</dt>
-            <dd className="font-medium">{when(visit.gps_captured_at)}</dd>
-          </div>
-        </dl>
-        {visit.outside_radius_reason ? (
-          <Alert tone="warning" className="mt-3">
-            Technician&apos;s reason for starting outside the site area: {visit.outside_radius_reason}
-          </Alert>
-        ) : null}
-      </CardContent>
-    </Card>
   );
 }

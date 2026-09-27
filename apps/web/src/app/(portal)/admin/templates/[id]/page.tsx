@@ -1,172 +1,140 @@
 import { humanizeStatus } from '@ipt/shared';
-import { ArrowDown, ArrowUp, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { requireCapability } from '@/lib/auth';
-import { createClient } from '@/lib/supabase/server';
-import { cn } from '@/lib/utils';
-import { activateTemplate, cloneTemplate, moveEntry } from '../actions';
-import { SectionForm } from './section-form';
+import { load } from '@/lib/api/data';
+import { requirePermission } from '@/lib/auth';
+import { SectionForm, TemplateDetailsForm, TemplateStepButton, type ItemValues, type ReadingValues, type SectionValues } from '../template-forms';
 
-export const metadata: Metadata = { title: 'PM template' };
+export const metadata: Metadata = { title: 'PM Template' };
 
-function MoveButtons({ kind, id, templateId }: { kind: 'item' | 'reading'; id: string; templateId: string }) {
-  return (
-    <span className="flex">
-      {(['up', 'down'] as const).map((direction) => (
-        <form key={direction} action={moveEntry}>
-          <input type="hidden" name="kind" value={kind} />
-          <input type="hidden" name="id" value={id} />
-          <input type="hidden" name="direction" value={direction} />
-          <input type="hidden" name="template_id" value={templateId} />
-          <Button type="submit" variant="ghost" size="sm" aria-label={`Move ${direction}`}>
-            {direction === 'up' ? <ArrowUp /> : <ArrowDown />}
-          </Button>
-        </form>
-      ))}
-    </span>
-  );
+export interface TemplateDetail {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  version: number;
+  status: 'DRAFT' | 'ACTIVE' | 'RETIRED';
+  sections: (SectionValues & { items: Required<ItemValues>[]; readingFields: Required<ReadingValues>[] })[];
 }
 
 export default async function TemplatePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  await requireCapability('manage_templates');
-  const supabase = await createClient();
-  const { data: template, error } = await supabase
-    .from('pm_templates')
-    .select('*, pm_sections(*, pm_checklist_items(*), pm_reading_fields(*))')
-    .eq('id', id)
-    .maybeSingle();
-  if (error) throw new Error(`Unable to load template: ${error.message}`);
-  if (!template) notFound();
-  const readOnly = template.status === 'RETIRED';
-  const sections = [...template.pm_sections].sort((a, b) => a.sort_order - b.sort_order);
-
+  await requirePermission('pm_templates.manage');
+  const t = await load<TemplateDetail>(`/pm-templates/${id}`);
+  const draft = t.status === 'DRAFT';
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`${template.name} · v${template.version}`}
-        description={
-          <span className="flex items-center gap-2">
-            <Badge tone={template.status === 'ACTIVE' ? 'success' : template.status === 'DRAFT' ? 'warning' : 'neutral'}>{template.status}</Badge>
-            {template.code}
-          </span>
-        }
+        title={`${t.name} v${t.version}`}
+        description={t.code}
         actions={
           <>
-            {template.status === 'DRAFT' ? (
-              <form action={activateTemplate}>
-                <input type="hidden" name="template_id" value={id} />
-                <Button type="submit" variant="accent">
-                  Activate this version
-                </Button>
-              </form>
-            ) : (
-              <form action={cloneTemplate}>
-                <input type="hidden" name="template_id" value={id} />
-                <Button type="submit" variant="outline">
-                  Create new version
-                </Button>
-              </form>
-            )}
+            <Badge tone={draft ? 'warning' : t.status === 'ACTIVE' ? 'success' : 'neutral'}>{humanizeStatus(t.status)}</Badge>
+            {draft ? <TemplateStepButton id={t.id} step="activate" label="Activate" variant="default" confirm="Activate this version? New PMs and open schedules will use it." /> : null}
+            {draft ? <TemplateStepButton id={t.id} step="delete" label="Delete draft" variant="destructive" confirm="Delete this draft and everything in it?" /> : null}
           </>
         }
       />
-      {readOnly ? <Alert tone="info">Retired version — read-only. It remains available for historical PM records.</Alert> : null}
-      {template.status === 'ACTIVE' ? (
-        <Alert tone="warning">
-          This is the live version. Wording, severity and evidence changes apply immediately (answers keep the question text they
-          were given). For structural changes that should not affect PM already in progress, create a new version.
-        </Alert>
+      {!draft ? <Alert tone="info">This version is {t.status.toLowerCase()} and cannot be changed. Create a new version from the templates list to change the checklist.</Alert> : null}
+      {draft ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Template</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TemplateDetailsForm id={t.id} name={t.name} description={t.description} />
+          </CardContent>
+        </Card>
       ) : null}
-
-      {sections.map((section) => {
-        const items = [...section.pm_checklist_items].sort((a, b) => a.sort_order - b.sort_order);
-        const readings = [...section.pm_reading_fields].sort((a, b) => a.sort_order - b.sort_order);
-        return (
-          <Card key={section.id} id={`section-${section.id}`}>
-            <CardHeader className="gap-3">
-              <CardTitle className="flex items-center gap-2">
-                {section.name}
-                <Badge tone="outline">{humanizeStatus(section.category)}</Badge>
-                {section.is_active ? null : <Badge>Inactive</Badge>}
-              </CardTitle>
-              {readOnly ? null : <SectionForm templateId={id} section={section} />}
-            </CardHeader>
-            <CardContent className="space-y-5">
+      {t.sections.map((s) => (
+        <Card key={s.id}>
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+            <CardTitle className="text-base">
+              {s.name} <span className="text-xs font-normal text-muted-foreground">{s.code} · {humanizeStatus(s.category)}</span>
+            </CardTitle>
+            <span className="flex gap-2">
+              {!s.isActive ? <Badge tone="neutral">Inactive</Badge> : null}
+              {s.allowNotApplicable ? <Badge tone="outline">N/A allowed{s.requiresEquipment ? ` (default without ${s.requiresEquipment.toLowerCase()})` : ''}</Badge> : null}
+            </span>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {s.readingFields.length ? (
               <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold">Readings</h3>
-                  {readOnly ? null : (
-                    <Link href={`/admin/templates/${id}/readings/new?section=${section.id}`} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
-                      <Plus /> Add reading
-                    </Link>
-                  )}
-                </div>
-                {readings.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No readings.</p>
-                ) : (
-                  <ul className="divide-y rounded-lg border">
-                    {readings.map((f) => (
-                      <li key={f.id} className={cn('flex items-center justify-between gap-3 px-3 py-2 text-sm', !f.is_active && 'opacity-50')}>
-                        <Link href={`/admin/templates/${id}/readings/${f.id}`} className="hover:underline">
-                          {f.label}
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            {humanizeStatus(f.value_type)}
-                            {f.unit ? ` · ${f.unit}` : ''}
-                            {f.min_value != null || f.max_value != null ? ` · ${f.min_value ?? '−∞'}–${f.max_value ?? '∞'}` : ''}
-                            {f.is_required ? '' : ' · optional'}
-                          </span>
-                        </Link>
-                        {readOnly ? null : <MoveButtons kind="reading" id={f.id} templateId={id} />}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold">Checklist ({items.filter((i) => i.is_active).length} active)</h3>
-                  {readOnly ? null : (
-                    <Link href={`/admin/templates/${id}/items/new?section=${section.id}`} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
-                      <Plus /> Add question
-                    </Link>
-                  )}
-                </div>
-                <ul className="divide-y rounded-lg border">
-                  {items.map((item) => (
-                    <li key={item.id} className={cn('flex items-center justify-between gap-3 px-3 py-2 text-sm', !item.is_active && 'opacity-50')}>
-                      <Link href={`/admin/templates/${id}/items/${item.id}`} className="min-w-0 hover:underline">
-                        {item.prompt}
-                        <span className="ml-2 flex-wrap text-xs text-muted-foreground">
-                          {humanizeStatus(item.response_type)}
-                          {item.is_required ? '' : ' · optional'}
-                        </span>
+                <p className="mb-1 text-sm font-medium">Readings</p>
+                <ul className="divide-y text-sm">
+                  {s.readingFields.map((f) => (
+                    <li key={f.id} className="flex items-center justify-between gap-2 py-1.5">
+                      <Link href={`/admin/templates/${t.id}/readings/${f.id}`} className="hover:underline">
+                        {f.label}
+                        {f.unit ? ` (${f.unit})` : ''}
                       </Link>
-                      <span className="flex shrink-0 items-center gap-1">
-                        {item.creates_failure_on_no || item.creates_failure_on_yes ? (
-                          <Badge tone="danger">
-                            Fails on {item.creates_failure_on_no ? 'NO' : 'YES'} · {item.failure_severity}
-                          </Badge>
-                        ) : null}
-                        {item.requires_photo_on_answer.length ? <Badge tone="info">Photo on {item.requires_photo_on_answer.join('/')}</Badge> : null}
-                        {item.is_active ? null : <Badge>Inactive</Badge>}
-                        {readOnly ? null : <MoveButtons kind="item" id={item.id} templateId={id} />}
+                      <span className="flex gap-1 text-xs text-muted-foreground">
+                        {f.isRequired ? <Badge tone="outline">Required</Badge> : null}
+                        {!f.isActive ? <Badge tone="neutral">Inactive</Badge> : null}
+                        {f.analyticsKey ? <code>{f.analyticsKey}</code> : null}
                       </span>
                     </li>
                   ))}
                 </ul>
               </div>
-            </CardContent>
-          </Card>
-        );
-      })}
+            ) : null}
+            <div>
+              <p className="mb-1 text-sm font-medium">Checklist</p>
+              {s.items.length ? (
+                <ul className="divide-y text-sm">
+                  {s.items.map((i) => (
+                    <li key={i.id} className="flex items-center justify-between gap-2 py-1.5">
+                      <Link href={`/admin/templates/${t.id}/items/${i.id}`} className="hover:underline">
+                        {i.prompt}
+                      </Link>
+                      <span className="flex shrink-0 gap-1">
+                        <Badge tone="outline">{i.responseType === 'YES_NO_NA' ? 'Yes/No/N/A' : humanizeStatus(i.responseType)}</Badge>
+                        {i.failureOnAnswer ? <Badge tone="danger">Fails on {i.failureOnAnswer === 'YES' ? 'Yes' : 'No'}</Badge> : null}
+                        {!i.isActive ? <Badge tone="neutral">Inactive</Badge> : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-muted-foreground">No questions.</p>
+              )}
+            </div>
+            {draft ? (
+              <div className="flex flex-wrap gap-4 text-sm">
+                <Link href={`/admin/templates/${t.id}/items/new?section=${s.id}`} className="inline-flex items-center gap-1 text-info hover:underline">
+                  <Plus className="size-4" aria-hidden /> Add question
+                </Link>
+                <Link href={`/admin/templates/${t.id}/readings/new?section=${s.id}`} className="inline-flex items-center gap-1 text-info hover:underline">
+                  <Plus className="size-4" aria-hidden /> Add reading
+                </Link>
+              </div>
+            ) : null}
+            {draft ? (
+              <details className="rounded-lg border p-3">
+                <summary className="cursor-pointer text-sm font-medium">Edit section</summary>
+                <div className="pt-3">
+                  <SectionForm templateId={t.id} section={s} />
+                </div>
+              </details>
+            ) : null}
+          </CardContent>
+        </Card>
+      ))}
+      {draft ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Add section</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <SectionForm templateId={t.id} />
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   );
 }

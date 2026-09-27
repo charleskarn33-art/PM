@@ -1,106 +1,111 @@
-import { can, humanizeStatus, PM_STATUS_TONE } from '@ipt/shared';
+import { PM_STATUS_TONE, SEVERITY_TONE, humanizeStatus } from '@ipt/shared';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
-import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { requireRole } from '@/lib/auth';
-import { createClient } from '@/lib/supabase/server';
-import { cancelSchedule } from '../actions';
-import { EditScheduleForm } from './edit-form';
+import { load, loadOptional } from '@/lib/api/data';
+import type { Assignment, Schedule } from '@/lib/api/types';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { formatDate, formatDateTime } from '@/lib/format';
+import { CancelScheduleForm, EditScheduleForm } from '../schedule-forms';
 
-export const metadata: Metadata = { title: 'PM schedule' };
-const date = (v: string | null) => (v ? new Date(v).toLocaleDateString('en-GB') : '—');
+export const metadata: Metadata = { title: 'PM' };
+
+type Detail = Schedule & { visits: { id: string; status: keyof typeof PM_STATUS_TONE; startedAt: string; completedAt: string | null }[] };
 
 export default async function ScheduleDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const session = await requireRole(['super_admin', 'regional_manager', 'regional_supervisor', 'viewer']);
-  const supabase = await createClient();
-  const { data: s, error } = await supabase.from('pm_schedule_overview').select('*').eq('id', id).maybeSingle();
-  if (error) throw new Error(`Unable to load schedule: ${error.message}`);
-  if (!s || !s.site_id) notFound();
-
-  const assignments = await supabase
-    .from('site_assignments')
-    .select('technician_id, technicians(is_active, profiles!technicians_id_fkey(full_name, email, is_active))')
-    .eq('site_id', s.site_id)
-    .eq('is_active', true);
-  if (assignments.error) throw new Error(assignments.error.message);
-  const technicians = (assignments.data ?? [])
-    .filter((a) => a.technicians?.is_active && a.technicians.profiles?.is_active)
-    .map((a) => ({
-    id: a.technician_id,
-    name: a.technicians?.profiles?.full_name || a.technicians?.profiles?.email || 'Technician',
-  }));
-  const editable = can(session.role, 'schedule_pm') && ['SCHEDULED', 'OVERDUE'].includes(s.status ?? '');
+  const session = await requirePermission('pm_schedules.read');
+  const s = await load<Detail>(`/pm-schedules/${id}`);
+  const canManage = hasPermission(session, 'pm_schedules.manage') && (session.isGlobal || session.regionIds.includes(s.site.regionId));
+  const open = s.status === 'SCHEDULED' || s.status === 'OVERDUE';
+  // Technicians who may take this PM: those assigned to the site.
+  const assignments = canManage && open ? await loadOptional<Assignment[]>(`/sites/${s.siteId}/assignments`) : null;
+  const technicians = (assignments ?? []).filter((a) => a.active && a.role === 'TECHNICIAN').map((a) => ({ id: a.user.id, label: a.user.fullName }));
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl space-y-6">
       <PageHeader
-        title={`${s.site_code} · ${s.site_name}`}
-        description={
-          <span className="flex flex-wrap items-center gap-2">
-            PM due {date(s.due_date)}
-            <StatusBadge status={s.status!} tone={PM_STATUS_TONE[s.status!]} />
-            {s.is_overdue && s.status !== 'OVERDUE' ? <StatusBadge status="OVERDUE" tone="danger" /> : null}
-          </span>
-        }
-        actions={
-          <>
-            {s.visit_id ? (
-              <Link href={`/visits/${s.visit_id}`} className={buttonVariants({ variant: 'outline' })}>
-                Open PM visit
-              </Link>
-            ) : null}
-            <Link href={`/sites/${s.site_id}`} className={buttonVariants({ variant: 'ghost' })}>
-              Site
-            </Link>
-          </>
-        }
+        title={`PM — ${s.site.siteCode} · ${s.site.siteName}`}
+        description={`${s.template.name} v${s.template.version} · ${humanizeStatus(s.frequency)}`}
+        actions={<StatusBadge status={s.status} tone={PM_STATUS_TONE[s.status]} />}
       />
-      <Card>
-        <CardHeader>
-          <CardTitle>Details</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid gap-4 text-sm sm:grid-cols-3">
-            <div><dt className="text-muted-foreground">Technician</dt><dd className="font-medium">{s.technician_name ?? 'Unassigned'}</dd></div>
-            <div><dt className="text-muted-foreground">Supervisor</dt><dd className="font-medium">{s.supervisor_name ?? '—'}</dd></div>
-            <div><dt className="text-muted-foreground">Frequency</dt><dd className="font-medium">{humanizeStatus(s.frequency ?? '')}</dd></div>
-            <div><dt className="text-muted-foreground">Scheduled</dt><dd className="font-medium">{date(s.scheduled_date)}</dd></div>
-            <div><dt className="text-muted-foreground">Due</dt><dd className="font-medium">{date(s.due_date)}</dd></div>
-            <div><dt className="text-muted-foreground">Template</dt><dd className="font-medium">{s.template_name} v{s.template_version}</dd></div>
-          </dl>
-          {s.notes ? <p className="mt-4 text-sm">{s.notes}</p> : null}
-        </CardContent>
-      </Card>
-      {editable ? (
+      <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Reschedule or reassign</CardTitle>
+            <CardTitle className="text-base">Plan</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <EditScheduleForm
-              schedule={{
-                id: s.id!,
-                scheduled_date: s.scheduled_date!,
-                due_date: s.due_date!,
-                technician_id: s.technician_id,
-                priority: s.priority ?? 'MEDIUM',
-                notes: s.notes,
-              }}
-              technicians={technicians}
-            />
-            <form action={cancelSchedule} className="border-t pt-4">
-              <input type="hidden" name="id" value={s.id!} />
-              <Button type="submit" variant="destructive" size="sm">
-                Cancel this PM
-              </Button>
-            </form>
+          <CardContent>
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">Site</dt>
+              <dd>
+                <Link href={`/sites/${s.site.id}`} className="hover:underline">
+                  {s.site.siteCode} · {s.site.siteName}
+                </Link>
+              </dd>
+              <dt className="text-muted-foreground">Technician</dt>
+              <dd>{s.technician?.fullName ?? 'Unassigned'}</dd>
+              <dt className="text-muted-foreground">Scheduled</dt>
+              <dd>{formatDate(s.scheduledDate)}</dd>
+              <dt className="text-muted-foreground">Due</dt>
+              <dd>{formatDate(s.dueDate)}</dd>
+              <dt className="text-muted-foreground">Priority</dt>
+              <dd>
+                <StatusBadge status={s.priority} tone={SEVERITY_TONE[s.priority]} />
+              </dd>
+              <dt className="text-muted-foreground">Notes</dt>
+              <dd className="whitespace-pre-wrap">{s.notes ?? '—'}</dd>
+              {s.cancelReason ? (
+                <>
+                  <dt className="text-muted-foreground">Cancelled</dt>
+                  <dd>{s.cancelReason}</dd>
+                </>
+              ) : null}
+            </dl>
           </CardContent>
         </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Visits</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {s.visits.length ? (
+              <ul className="divide-y text-sm">
+                {s.visits.map((v) => (
+                  <li key={v.id} className="flex items-center justify-between gap-2 py-2">
+                    <Link href={`/visits/${v.id}`} className="hover:underline">
+                      Started {formatDateTime(v.startedAt)}
+                    </Link>
+                    <StatusBadge status={v.status} tone={PM_STATUS_TONE[v.status]} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">Not started yet.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+      {canManage && open ? (
+        <div className="grid gap-6 md:grid-cols-[2fr_1fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Change</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <EditScheduleForm schedule={s} technicians={technicians} />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Cancel</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <CancelScheduleForm id={s.id} />
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
     </div>
   );

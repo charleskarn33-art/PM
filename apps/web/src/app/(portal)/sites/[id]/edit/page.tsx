@@ -2,33 +2,24 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent } from '@/components/ui/card';
-import { requireCapability } from '@/lib/auth';
-import { loadClusters, loadCounties, loadRegions, loadSupervisors } from '@/lib/org-data';
-import { createClient } from '@/lib/supabase/server';
+import { load } from '@/lib/api/data';
+import type { Region, Site } from '@/lib/api/types';
+import { requirePermission } from '@/lib/auth';
 import { SiteForm } from '../../site-form';
 
 export const metadata: Metadata = { title: 'Edit site' };
 
 export default async function EditSitePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  await requireCapability('manage_organization');
-  const supabase = await createClient();
-  const [siteResult, regions, clusters, counties, supervisors] = await Promise.all([
-    supabase.from('sites').select('*').eq('id', id).maybeSingle(),
-    loadRegions(supabase),
-    loadClusters(supabase),
-    loadCounties(supabase),
-    loadSupervisors(supabase),
-  ]);
-  if (siteResult.error) throw new Error(`Unable to load site: ${siteResult.error.message}`);
-  const site = siteResult.data;
-  if (!site) notFound();
+  const session = await requirePermission('sites.manage');
+  if (!session.isGlobal) notFound();
+  const [site, hierarchy] = await Promise.all([load<Site>(`/sites/${id}`), load<Region[]>('/org/hierarchy')]);
   return (
     <div className="max-w-4xl space-y-6">
-      <PageHeader title={`Edit ${site.site_code} · ${site.site_name}`} />
+      <PageHeader title={`Edit ${site.siteCode}`} description={site.siteName} />
       <Card>
-        <CardContent className="pt-5">
-          <SiteForm initial={site} regions={regions} clusters={clusters} counties={counties} supervisors={supervisors} />
+        <CardContent className="pt-6">
+          <SiteForm site={site} hierarchy={hierarchy} />
         </CardContent>
       </Card>
     </div>

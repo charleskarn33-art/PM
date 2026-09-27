@@ -1,102 +1,58 @@
 'use server';
 
-import { isUuid, requiredNote, validateCorrectiveAction, type Enums } from '@ipt/shared';
-import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { api } from '@/lib/api/server';
 import { requireSession } from '@/lib/auth';
-import { formValues, type FormValues } from '@/lib/form-values';
-import { createClient } from '@/lib/supabase/server';
+import { submit, text, type FormState } from '@/lib/form-action';
 
-export interface ActionFormState {
-  error?: string;
-  success?: string;
-  fieldErrors?: Record<string, string | undefined>;
-  values?: FormValues;
-}
+const STEPS = {
+  start: 'Work started.',
+  complete: 'Marked completed.',
+  verify: 'Verification recorded.',
+  close: 'Action closed.',
+  assign: 'Assigned.',
+} as const;
 
-function dbMessage(message: string): string {
-  if (/row-level security|Only the assignee or a supervisor/i.test(message)) return 'You are not allowed to change this corrective action.';
-  return message;
-}
-
-function refresh(id: string) {
-  revalidatePath(`/corrective-actions/${id}`);
-  revalidatePath('/corrective-actions');
-}
-
-/** Supervisor edit: description, priority, assignee, due date. The database decides who may do it. */
-export async function updateCorrectiveAction(_prev: ActionFormState, formData: FormData): Promise<ActionFormState> {
+/** One workflow step (`step` field); the API decides who may take it and from which status. */
+export async function actionStep(_prev: FormState, formData: FormData): Promise<FormState> {
   await requireSession();
-  const values = formValues(formData);
-  const id = values.id ?? '';
-  if (!isUuid(id)) return { error: 'Invalid corrective action.' };
-  const result = validateCorrectiveAction(values);
-  if (!result.ok) return { error: 'Please correct the highlighted fields.', fieldErrors: result.errors, values };
-  const supabase = await createClient();
-  const { data, error } = await supabase.from('corrective_actions').update(result.value).eq('id', id).select('id');
-  if (error) return { error: dbMessage(error.message), values };
-  if (!data?.length) return { error: 'You are not allowed to change this corrective action.', values };
-  refresh(id);
-  return { success: 'Saved.' };
+  const id = text(formData, 'id') ?? '';
+  const failureId = text(formData, 'failureId') ?? '';
+  const step = text(formData, 'step') as keyof typeof STEPS;
+  if (!(step in STEPS)) return { error: 'Unknown step.' };
+  const body =
+    step === 'complete'
+      ? { note: text(formData, 'note') ?? '' }
+      : step === 'verify'
+        ? { decision: text(formData, 'decision') === 'REJECT' ? 'REJECT' : 'APPROVE', note: text(formData, 'note') }
+        : step === 'close'
+          ? { note: text(formData, 'note') }
+          : step === 'assign'
+            ? { assignedToId: text(formData, 'assignedToId'), dueDate: text(formData, 'dueDate', true) }
+            : undefined;
+  const rejected = step === 'verify' && text(formData, 'decision') === 'REJECT';
+  const result = await submit(formData, () => api(`/corrective-actions/${id}/${step}`, { method: 'POST', body }), rejected ? 'Sent back for rework.' : STEPS[step], [
+    `/corrective-actions/${id}`,
+    '/corrective-actions',
+    `/failures/${failureId}`,
+    '/dashboard',
+  ]);
+  // The form that was used disappears with the new status: say what happened at the top of the page.
+  if (result.success) redirect(`/corrective-actions/${id}?done=${rejected ? 'reject' : step}`);
+  return result;
 }
 
-const TARGETS: Enums<'corrective_action_status'>[] = ['IN_PROGRESS', 'COMPLETED', 'VERIFIED', 'CLOSED'];
-
-/** Moves the workflow forward: start, complete (with resolution), verify, close. */
-export async function changeActionStatus(_prev: ActionFormState, formData: FormData): Promise<ActionFormState> {
+export async function updateAction(_prev: FormState, formData: FormData): Promise<FormState> {
   await requireSession();
-  const values = formValues(formData);
-  const id = values.id ?? '';
-  const status = values.status as Enums<'corrective_action_status'>;
-  if (!isUuid(id) || !TARGETS.includes(status)) return { error: 'Invalid request.' };
-  const patch: { status: Enums<'corrective_action_status'>; resolution?: string } = { status };
-  // Closing before verification (cancelling the work) needs a reason on the timeline.
-  let note: string | null = null;
-  if (values.require_note === '1') {
-    const n = requiredNote(values, 'note', 5);
-    if (!n.ok) return { fieldErrors: { note: n.error }, values };
-    note = n.value;
-  }
-  if (status === 'COMPLETED') {
-    const note = requiredNote(values, 'resolution', 5);
-    if (!note.ok) return { fieldErrors: { resolution: note.error }, values };
-    patch.resolution = note.value;
-  }
-  const supabase = await createClient();
-  const { data, error } = await supabase.from('corrective_actions').update(patch).eq('id', id).select('id');
-  if (error) return { error: dbMessage(error.message), values };
-  if (!data?.length) return { error: 'You are not allowed to change this corrective action.', values };
-  if (note) {
-    const { error: noteError } = await supabase.from('corrective_action_updates').insert({ corrective_action_id: id, note });
-    if (noteError) return { error: `Status changed, but the note was not saved: ${noteError.message}` };
-  }
-  refresh(id);
-  // The controls for the old status disappear, so confirm on the page itself.
-  redirect(`/corrective-actions/${id}?done=${status}`);
-}
-
-export async function returnCorrectiveAction(_prev: ActionFormState, formData: FormData): Promise<ActionFormState> {
-  await requireSession();
-  const values = formValues(formData);
-  const id = values.id ?? '';
-  const note = requiredNote(values, 'note', 5);
-  if (!note.ok) return { fieldErrors: { note: note.error }, values };
-  const supabase = await createClient();
-  const { error } = await supabase.rpc('return_corrective_action', { p_action_id: id, p_note: note.value });
-  if (error) return { error: dbMessage(error.message), values };
-  refresh(id);
-  redirect(`/corrective-actions/${id}?done=RETURNED`);
-}
-
-export async function addActionNote(_prev: ActionFormState, formData: FormData): Promise<ActionFormState> {
-  await requireSession();
-  const values = formValues(formData);
-  const id = values.id ?? '';
-  const note = requiredNote(values, 'note', 2);
-  if (!note.ok) return { fieldErrors: { note: note.error }, values };
-  const supabase = await createClient();
-  const { error } = await supabase.from('corrective_action_updates').insert({ corrective_action_id: id, note: note.value });
-  if (error) return { error: dbMessage(error.message), values };
-  refresh(id);
-  return { success: 'Note added.' };
+  const id = text(formData, 'id') ?? '';
+  return submit(
+    formData,
+    () =>
+      api(`/corrective-actions/${id}`, {
+        method: 'PATCH',
+        body: { title: text(formData, 'title'), description: text(formData, 'description', true), priority: text(formData, 'priority'), dueDate: text(formData, 'dueDate', true) },
+      }),
+    'Action updated.',
+    [`/corrective-actions/${id}`],
+  );
 }

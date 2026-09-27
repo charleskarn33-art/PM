@@ -1,117 +1,113 @@
-import { ROLE_LABELS, type AppRole } from '@ipt/shared';
-import { Search, UserPlus } from 'lucide-react';
+import { humanizeStatus } from '@ipt/shared';
+import { Plus, Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
-import { SortHeader } from '@/components/data-table/sort-header';
+import { EmptyRow } from '@/components/empty-row';
 import { PageHeader } from '@/components/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { requireCapability } from '@/lib/auth';
-import { createClient } from '@/lib/supabase/server';
-import { isBeyondLastPage, pageRange, parseTableParams, tableHref, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { load, loadPage, qs } from '@/lib/api/data';
+import type { UserSummary } from '@/lib/api/types';
+import { requirePermission } from '@/lib/auth';
+import { formatDateTime } from '@/lib/format';
+import { parseTableParams, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'Users' };
 
-const SORTS = ['full_name', 'email', 'role', 'last_login_at', 'created_at'] as const;
-
 export default async function UsersPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
-  await requireCapability('manage_users');
-  const params = parseTableParams(sp, { sortable: SORTS, defaultSort: 'full_name', filters: ['role', 'status'] });
-  const supabase = await createClient();
-
-  let query = supabase.from('profiles').select('id, full_name, email, role, is_active, last_login_at, regions!profiles_region_id_fkey(name)', { count: 'exact' });
-  if (params.filters.role && params.filters.role in ROLE_LABELS) query = query.eq('role', params.filters.role as AppRole);
-  if (params.filters.status === 'active') query = query.eq('is_active', true);
-  if (params.filters.status === 'inactive') query = query.eq('is_active', false);
-  if (params.q) {
-    const p = toIlikePattern(params.q);
-    query = query.or(`full_name.ilike.${p},email.ilike.${p}`);
-  }
-  const { from, to } = pageRange(params.page, params.pageSize);
-  const { data, count, error } = await query
-    .order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false })
-    .range(from, to);
-  if (isBeyondLastPage(error)) redirect(tableHref('/admin/users', sp, { page: null }));
-  if (error) throw new Error(`Unable to load users: ${error.message}`);
-  const users = data ?? [];
-  const sortProps = { pathname: '/admin/users', searchParams: sp, sort: params.sort, dir: params.dir };
-
+  const session = await requirePermission('users.manage');
+  const p = parseTableParams(sp, { sortable: ['name'] as const, defaultSort: 'name', filters: ['role', 'active'] });
+  const [page, roles] = await Promise.all([
+    loadPage<UserSummary & { lockedUntil: string | null; mustChangePassword: boolean }>(`/users${qs({ q: p.q, role: p.filters.role, active: p.filters.active, page: p.page, pageSize: p.pageSize })}`),
+    load<{ code: string; name: string }[]>('/roles'),
+  ]);
+  const roleName = new Map(roles.map((r) => [r.code, r.name]));
   return (
     <div className="space-y-6">
       <PageHeader
         title="Users"
-        description="Accounts, roles, activation and data scope."
+        description="Accounts, roles and access scope."
         actions={
-          <Link href="/admin/users/invite" className={buttonVariants({ variant: 'accent' })}>
-            <UserPlus aria-hidden />
-            Invite user
-          </Link>
+          session.isGlobal ? (
+            <Link href="/admin/users/new" className={buttonVariants({ variant: 'accent' })}>
+              <Plus aria-hidden />
+              New user
+            </Link>
+          ) : null
         }
       />
-      <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">
-        <div className="relative md:col-span-2">
+      <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-[1fr_14rem_12rem_auto]">
+        <div className="relative">
           <Search className="absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />
-          <Input name="q" defaultValue={params.q} placeholder="Name or email" className="pl-9" aria-label="Search users" />
+          <Input name="q" defaultValue={p.q} placeholder="Name, e-mail or employee code" className="pl-9" aria-label="Search users" />
         </div>
-        <Select name="role" defaultValue={params.filters.role ?? ''} aria-label="Role">
-          <option value="">All roles</option>
-          {Object.entries(ROLE_LABELS).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
+        <Select name="role" defaultValue={p.filters.role ?? ''} aria-label="Role">
+          <option value="">Any role</option>
+          {roles.map((r) => (
+            <option key={r.code} value={r.code}>
+              {r.name}
             </option>
           ))}
         </Select>
+        <Select name="active" defaultValue={p.filters.active ?? ''} aria-label="Status">
+          <option value="">Active and inactive</option>
+          <option value="true">Active</option>
+          <option value="false">Inactive</option>
+        </Select>
         <div className="flex gap-2">
-          <Select name="status" defaultValue={params.filters.status ?? ''} aria-label="Status">
-            <option value="">Any status</option>
-            <option value="active">Active</option>
-            <option value="inactive">Pending / inactive</option>
-          </Select>
           <Button type="submit">Apply</Button>
+          <Link href="/admin/users" className={buttonVariants({ variant: 'ghost' })}>
+            Reset
+          </Link>
         </div>
       </form>
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <SortHeader label="Name" column="full_name" {...sortProps} />
-            <SortHeader label="Email" column="email" {...sortProps} />
-            <SortHeader label="Role" column="role" {...sortProps} />
-            <TableHead>Home region</TableHead>
+            <TableHead>Name</TableHead>
+            <TableHead>E-mail</TableHead>
+            <TableHead>Roles</TableHead>
+            <TableHead>Last sign-in</TableHead>
             <TableHead>Status</TableHead>
-            <SortHeader label="Last sign-in" column="last_login_at" {...sortProps} />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {users.length === 0 ? (
-            <EmptyRow colSpan={6} message="No users match these filters." />
+          {page.items.length === 0 ? (
+            <EmptyRow colSpan={5} message="No users match these filters." />
           ) : (
-            users.map((u) => (
+            page.items.map((u) => (
               <TableRow key={u.id}>
-                <TableCell>
-                  <Link href={`/admin/users/${u.id}`} className="font-medium hover:underline">
-                    {u.full_name || '(no name)'}
+                <TableCell className="font-medium">
+                  <Link href={`/admin/users/${u.id}`} className="hover:underline">
+                    {u.fullName}
                   </Link>
+                  {u.employeeCode ? <p className="text-xs text-muted-foreground">{u.employeeCode}</p> : null}
                 </TableCell>
                 <TableCell>{u.email}</TableCell>
-                <TableCell>{ROLE_LABELS[u.role]}</TableCell>
-                <TableCell>{u.regions?.name ?? '—'}</TableCell>
-                <TableCell>
-                  <Badge tone={u.is_active ? 'success' : 'warning'}>{u.is_active ? 'Active' : 'Pending'}</Badge>
+                <TableCell className="space-x-1">
+                  {u.roles.map((r) => (
+                    <Badge key={r} tone="outline">
+                      {roleName.get(r) ?? humanizeStatus(r)}
+                    </Badge>
+                  ))}
                 </TableCell>
-                <TableCell>{u.last_login_at ? new Date(u.last_login_at).toLocaleString('en-GB') : '—'}</TableCell>
+                <TableCell className="whitespace-nowrap">{formatDateTime(u.lastLoginAt)}</TableCell>
+                <TableCell className="space-x-1">
+                  <Badge tone={u.isActive ? 'success' : 'neutral'}>{u.isActive ? 'Active' : 'Inactive'}</Badge>
+                  {u.mustChangePassword ? <Badge tone="warning">Must change password</Badge> : null}
+                  {u.lockedUntil && new Date(u.lockedUntil) > new Date() ? <Badge tone="danger">Locked</Badge> : null}
+                </TableCell>
               </TableRow>
             ))
           )}
         </TableBody>
       </Table>
-      <Pagination pathname="/admin/users" searchParams={sp} page={params.page} pageSize={params.pageSize} total={count ?? 0} />
+      <Pagination pathname="/admin/users" searchParams={sp} page={p.page} pageSize={p.pageSize} total={page.total} />
     </div>
   );
 }

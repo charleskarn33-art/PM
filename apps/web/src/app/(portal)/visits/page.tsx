@@ -1,72 +1,78 @@
-import { humanizeStatus, PM_STATUS_TONE, type Enums } from '@ipt/shared';
-import { Search } from 'lucide-react';
+import { PM_STATUS_TONE } from '@ipt/shared';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
-import { SortHeader } from '@/components/data-table/sort-header';
+import { EmptyRow } from '@/components/empty-row';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHeader, TableRow } from '@/components/ui/table';
-import { requireRole } from '@/lib/auth';
-import { createClient } from '@/lib/supabase/server';
-import { VISIT_STATUSES, visitListQuery } from '@/lib/list-queries';
-import { isBeyondLastPage, pageRange, parseTableParams, tableHref, type SearchParams } from '@/lib/table-params';
-import { ExportLink } from '@/components/export-link';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { loadAll, loadPage, qs } from '@/lib/api/data';
+import type { UserSummary, VisitSummary } from '@/lib/api/types';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { formatDateTime } from '@/lib/format';
+import { parseTableParams, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'PM Visits & Review' };
 
-const SORTS = ['submitted_at', 'started_at', 'site_code', 'technician_name', 'completion_pct', 'failure_count', 'status'] as const;
-const STATUSES = VISIT_STATUSES;
-const when = (v: string | null) => (v ? new Date(v).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+const STATUSES = [
+  ['COMPLETED', 'Waiting for review'],
+  ['IN_PROGRESS', 'In progress'],
+  ['REJECTED', 'Returned for correction'],
+  ['APPROVED', 'Approved'],
+] as const;
 
 export default async function VisitsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
-  await requireRole(['super_admin', 'regional_manager', 'regional_supervisor', 'viewer']);
-  const params = parseTableParams(sp, { sortable: SORTS, defaultSort: 'submitted_at', defaultDir: 'desc', filters: ['status', 'from', 'to'] });
-  const f = params.filters;
-  const status = (f.status ?? 'SUBMITTED') as Enums<'pm_status'> | 'ALL';
-  const supabase = await createClient();
-
-  const query = visitListQuery(supabase, params.q, f);
-  const { from, to } = pageRange(params.page, params.pageSize);
-  const { data, count, error } = await query
-    .order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false })
-    .range(from, to);
-  if (isBeyondLastPage(error)) redirect(tableHref('/visits', sp, { page: null }));
-  if (error) throw new Error(`Unable to load PM visits: ${error.message}`);
-  const rows = data ?? [];
-  const sortProps = { pathname: '/visits', searchParams: sp, sort: params.sort, dir: params.dir };
-
+  const session = await requirePermission('pm_visits.read');
+  const p = parseTableParams(sp, { sortable: ['started'] as const, defaultSort: 'started', filters: ['status', 'technician', 'site', 'from', 'to'] });
+  const f = p.filters;
+  const [page, technicians] = await Promise.all([
+    loadPage<VisitSummary>(`/visits${qs({ status: f.status, technicianId: f.technician, siteId: f.site, from: f.from, to: f.to, page: p.page, pageSize: p.pageSize })}`),
+    hasPermission(session, 'users.read') ? loadAll<UserSummary>('/users?role=TECHNICIAN') : Promise.resolve([] as UserSummary[]),
+  ]);
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="PM Visits & Review"
-        description="Submitted PM awaiting review, and PM history."
-        actions={<ExportLink href="/visits/export" searchParams={sp} />}
-      />
-      <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-5">
-        <div className="relative md:col-span-2">
-          <Search className="absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />
-          <Input name="q" defaultValue={params.q} placeholder="Site ID, site name or technician" className="pl-9" aria-label="Search" />
+      <PageHeader title="PM Visits & Review" description="PM visits in your scope, latest first. Completed visits wait for a supervisor to approve them or return them for correction." />
+      <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-5 md:items-end">
+        <div className="space-y-1.5">
+          <Label htmlFor="status">Status</Label>
+          <Select id="status" name="status" defaultValue={f.status ?? ''}>
+            <option value="">Any</option>
+            {STATUSES.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </Select>
         </div>
-        <Select name="status" defaultValue={status} aria-label="Status">
-          <option value="SUBMITTED">Awaiting review</option>
-          <option value="ALL">All statuses</option>
-          {STATUSES.filter((s) => s !== 'SUBMITTED').map((s) => (
-            <option key={s} value={s}>
-              {humanizeStatus(s)}
-            </option>
-          ))}
-        </Select>
-        <Input type="date" name="from" defaultValue={f.from} aria-label="Started from" />
-        <Input type="date" name="to" defaultValue={f.to} aria-label="Started to" />
-        <div className="flex gap-2 md:col-span-5">
+        {technicians.length ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="technician">Technician</Label>
+            <Select id="technician" name="technician" defaultValue={f.technician ?? ''}>
+              <option value="">Anyone</option>
+              {technicians.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.fullName}
+                </option>
+              ))}
+            </Select>
+          </div>
+        ) : null}
+        <div className="space-y-1.5">
+          <Label htmlFor="from">Started from</Label>
+          <Input id="from" name="from" type="date" defaultValue={f.from ?? ''} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="to">to</Label>
+          <Input id="to" name="to" type="date" defaultValue={f.to ?? ''} />
+        </div>
+        <div className="flex gap-2">
+          {f.site ? <input type="hidden" name="site" value={f.site} /> : null}
           <Button type="submit">Apply</Button>
           <Link href="/visits" className={buttonVariants({ variant: 'ghost' })}>
             Reset
@@ -76,43 +82,47 @@ export default async function VisitsPage({ searchParams }: { searchParams: Promi
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <SortHeader label="Site" column="site_code" {...sortProps} />
-            <SortHeader label="Technician" column="technician_name" {...sortProps} />
-            <SortHeader label="Started" column="started_at" {...sortProps} />
-            <SortHeader label="Submitted" column="submitted_at" {...sortProps} />
-            <SortHeader label="Completion" column="completion_pct" {...sortProps} />
-            <SortHeader label="Failures" column="failure_count" {...sortProps} />
-            <SortHeader label="Status" column="status" {...sortProps} />
+            <TableHead>Site</TableHead>
+            <TableHead>Technician</TableHead>
+            <TableHead>Started</TableHead>
+            <TableHead>Completed</TableHead>
+            <TableHead className="text-right">Complete</TableHead>
+            <TableHead className="text-right">Failures</TableHead>
+            <TableHead>Status</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.length === 0 ? (
-            <EmptyRow colSpan={7} message={status === 'SUBMITTED' ? 'No PM is waiting for review.' : 'No PM visits match these filters.'} />
+          {page.items.length === 0 ? (
+            <EmptyRow colSpan={7} message="No visits match these filters." />
           ) : (
-            rows.map((v) => (
+            page.items.map((v) => (
               <TableRow key={v.id}>
-                <TableCell className="whitespace-nowrap">
-                  <Link href={`/visits/${v.id}`} className="font-medium hover:underline">
-                    {v.site_code} · {v.site_name}
+                <TableCell className="font-medium">
+                  <Link href={`/visits/${v.id}`} className="hover:underline">
+                    {v.site.siteCode} · {v.site.siteName}
                   </Link>
-                  {v.is_demo ? <Badge className="ml-2">Demo</Badge> : null}
+                  {v.isDemo ? (
+                    <Badge tone="neutral" className="ml-2">
+                      Demo
+                    </Badge>
+                  ) : null}
                 </TableCell>
-                <TableCell>{v.technician_name}</TableCell>
-                <TableCell className="whitespace-nowrap">{when(v.started_at)}</TableCell>
-                <TableCell className="whitespace-nowrap">{when(v.submitted_at)}</TableCell>
-                <TableCell>{v.completion_pct}%</TableCell>
-                <TableCell>
-                  <Badge tone={v.failure_count ? 'danger' : 'neutral'}>{v.failure_count ?? 0}</Badge>
+                <TableCell>{v.technician.fullName}</TableCell>
+                <TableCell className="whitespace-nowrap">{formatDateTime(v.startedAt)}</TableCell>
+                <TableCell className="whitespace-nowrap">{formatDateTime(v.completedAt)}</TableCell>
+                <TableCell className="text-right tabular-nums">{Math.floor(v.completionPct)}%</TableCell>
+                <TableCell className="text-right">
+                  <Badge tone={v.failureCount ? 'danger' : 'neutral'}>{v.failureCount}</Badge>
                 </TableCell>
                 <TableCell>
-                  <StatusBadge status={v.status!} tone={PM_STATUS_TONE[v.status!]} />
+                  <StatusBadge status={v.status === 'COMPLETED' ? 'WAITING_FOR_REVIEW' : v.status} tone={PM_STATUS_TONE[v.status]} />
                 </TableCell>
               </TableRow>
             ))
           )}
         </TableBody>
       </Table>
-      <Pagination pathname="/visits" searchParams={sp} page={params.page} pageSize={params.pageSize} total={count ?? 0} />
+      <Pagination pathname="/visits" searchParams={sp} page={p.page} pageSize={p.pageSize} total={page.total} />
     </div>
   );
 }

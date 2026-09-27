@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, ChevronRight, Menu, X } from 'lucide-react';
+import { ChevronRight, Menu, Search, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
@@ -14,11 +14,10 @@ interface PortalShellProps {
   sections: NavSection[];
   userName: string;
   roleLabel: string;
-  unreadNotifications: number;
   children: React.ReactNode;
 }
 
-export function PortalShell({ sections, userName, roleLabel, unreadNotifications, children }: PortalShellProps) {
+export function PortalShell({ sections, userName, roleLabel, children }: PortalShellProps) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const crumbs = breadcrumbsFor(pathname);
@@ -59,17 +58,19 @@ export function PortalShell({ sections, userName, roleLabel, unreadNotifications
               ))}
             </ol>
           </nav>
-          <Link
-            href="/notifications"
-            className="relative inline-flex size-10 items-center justify-center rounded-md hover:bg-muted"
-            aria-label={unreadNotifications ? `Notifications: ${unreadNotifications} unread` : 'Notifications'}
-          >
-            <Bell className="size-5" aria-hidden />
-            {unreadNotifications ? (
-              <span className="absolute right-1 top-1 min-w-4 rounded-full bg-danger px-1 text-center text-[10px] font-bold leading-4 text-white">
-                {unreadNotifications > 99 ? '99+' : unreadNotifications}
-              </span>
-            ) : null}
+          <form action="/search" method="get" role="search" className="relative hidden md:block">
+            <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" aria-hidden />
+            <input
+              name="q"
+              minLength={2}
+              maxLength={100}
+              placeholder="Search sites, failures, actions, people"
+              aria-label="Search"
+              className="h-9 w-72 rounded-md border bg-background pl-8 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </form>
+          <Link href="/search" className="inline-flex size-10 items-center justify-center rounded-md hover:bg-muted md:hidden" aria-label="Search">
+            <Search className="size-5" aria-hidden />
           </Link>
           <div className="hidden text-right sm:block">
             <p className="text-sm font-medium leading-tight">{userName}</p>

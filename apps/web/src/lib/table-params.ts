@@ -39,7 +39,7 @@ export function parseTableParams<S extends string>(sp: SearchParams, config: Tab
     if (v) filters[key] = v;
   }
   const hidden = new Set(first(sp.hide).split(',').filter(Boolean));
-  // Limit free text to a sane length; PostgREST filter syntax chars are escaped by callers.
+  // Limit free text to a sane length (the API bounds it too).
   return { page, pageSize, sort, dir, q: first(sp.q).slice(0, 100), filters, hidden };
 }
 
@@ -60,27 +60,4 @@ export function tableHref(
   }
   const qs = params.toString();
   return qs ? `${pathname}?${qs}` : pathname;
-}
-
-/**
- * Escapes user text for use inside a PostgREST `or=(...ilike...)` filter:
- * strips characters with meaning in the filter grammar and escapes LIKE wildcards.
- */
-export function toIlikePattern(q: string): string {
-  const cleaned = q.replace(/[(),"'\\]/g, ' ').replace(/[%_]/g, (m) => `\\${m}`).trim();
-  return `%${cleaned}%`;
-}
-
-export function pageRange(page: number, pageSize: number): { from: number; to: number } {
-  const from = (page - 1) * pageSize;
-  return { from, to: from + pageSize - 1 };
-}
-
-/**
- * PostgREST answers a counted query whose offset is past the last row with
- * PGRST103 (416) instead of an empty page, e.g. after filters shrink a list
- * or on an old link. Lists go back to their first page; exports stop paging.
- */
-export function isBeyondLastPage(error: { code?: string } | null | undefined): boolean {
-  return error?.code === 'PGRST103';
 }

@@ -37,5 +37,5 @@ export async function changePassword(_prev: ChangePasswordState, formData: FormD
     return { error: 'Unable to change your password right now. Try again in a moment.' };
   }
   await storeSession(session);
-  redirect('/dashboard');
+  redirect('/');
 }

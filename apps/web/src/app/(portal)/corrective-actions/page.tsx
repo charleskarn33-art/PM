@@ -1,84 +1,60 @@
-import { CORRECTIVE_ACTION_STATUS_TONE, humanizeStatus, PM_CATEGORY_LABELS, PRIORITIES, SEVERITY_TONE } from '@ipt/shared';
-import { Search } from 'lucide-react';
+import { CORRECTIVE_ACTION_STATUS_TONE, SEVERITY_TONE } from '@ipt/shared';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
-import { SortHeader } from '@/components/data-table/sort-header';
+import { EmptyRow } from '@/components/empty-row';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
-import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { requireSession } from '@/lib/auth';
-import { createClient } from '@/lib/supabase/server';
-import { ACTION_STATUSES, actionListQuery } from '@/lib/list-queries';
-import { isBeyondLastPage, pageRange, parseTableParams, tableHref, type SearchParams } from '@/lib/table-params';
-import { ExportLink } from '@/components/export-link';
+import { loadPage, qs } from '@/lib/api/data';
+import type { ActionSummary } from '@/lib/api/types';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { dueText, formatDate } from '@/lib/format';
+import { parseTableParams, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'Corrective Actions' };
 
-const SORTS = ['due_date', 'created_at', 'action_number', 'site_code', 'priority', 'status', 'assignee_name'] as const;
-const STATUSES = ACTION_STATUSES;
+const STATUSES = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'COMPLETED', 'VERIFIED', 'CLOSED'] as const;
+const WORKING = ['ASSIGNED', 'IN_PROGRESS'];
 
-export default async function CorrectiveActionsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+export default async function ActionsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
-  const session = await requireSession();
-  const params = parseTableParams(sp, { sortable: SORTS, defaultSort: 'due_date', defaultDir: 'asc', filters: ['status', 'priority', 'overdue', 'mine'] });
-  const f = params.filters;
-  const status = f.status ?? 'ACTIVE';
-  const supabase = await createClient();
-
-  const query = actionListQuery(supabase, params.q, f, session.userId);
-  const { from, to } = pageRange(params.page, params.pageSize);
-  const { data, count, error } = await query.order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false }).range(from, to);
-  if (isBeyondLastPage(error)) redirect(tableHref('/corrective-actions', sp, { page: null }));
-  if (error) throw new Error(`Unable to load corrective actions: ${error.message}`);
-  const rows = data ?? [];
-  const sortProps = { pathname: '/corrective-actions', searchParams: sp, sort: params.sort, dir: params.dir };
-
+  const session = await requirePermission('corrective_actions.read');
+  const p = parseTableParams(sp, { sortable: ['due'] as const, defaultSort: 'due', filters: ['status', 'mine', 'overdue', 'site'] });
+  const f = p.filters;
+  // Field staff see their own work first; everyone else sees all in scope.
+  const mineDefault = !hasPermission(session, 'corrective_actions.manage') && hasPermission(session, 'corrective_actions.work');
+  const mine = f.mine ? f.mine === 'true' : mineDefault;
+  const status = f.status ?? (sp.status === undefined ? 'active' : undefined);
+  const page = await loadPage<ActionSummary>(
+    `/corrective-actions${qs({ status, assignedTo: mine ? 'me' : undefined, overdue: f.overdue === 'true' ? 'true' : undefined, siteId: f.site, page: p.page, pageSize: p.pageSize })}`,
+  );
+  const today = new Date().toISOString().slice(0, 10);
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Corrective Actions"
-        description="Repair work raised from failures: assignment, progress, verification and closure."
-        actions={<ExportLink href="/corrective-actions/export" searchParams={sp} />}
-      />
-      <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">
-        <div className="relative md:col-span-2">
-          <Search className="absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />
-          <Input name="q" defaultValue={params.q} placeholder="Action or failure no., site, description, assignee" className="pl-9" aria-label="Search" />
-        </div>
-        <Select name="status" defaultValue={status} aria-label="Status">
-          <option value="ACTIVE">Open (not yet verified)</option>
-          <option value="REVIEW">Completed, awaiting verification</option>
-          <option value="ALL">All statuses</option>
+      <PageHeader title="Corrective Actions" description="Work to resolve failures: assigned → in progress → completed → verified → closed. New actions are created from a failure." />
+      <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">
+        <Select name="status" defaultValue={status ?? ''} aria-label="Status">
+          <option value="active">Open (not verified)</option>
+          <option value="">Any status</option>
           {STATUSES.map((s) => (
             <option key={s} value={s}>
-              {humanizeStatus(s)}
+              {s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ')}
             </option>
           ))}
         </Select>
-        <Select name="priority" defaultValue={f.priority ?? ''} aria-label="Priority">
-          <option value="">All priorities</option>
-          {PRIORITIES.map((p) => (
-            <option key={p} value={p}>
-              {humanizeStatus(p)}
-            </option>
-          ))}
+        <Select name="mine" defaultValue={mine ? 'true' : 'false'} aria-label="Assigned to">
+          <option value="false">Anyone</option>
+          <option value="true">Assigned to me</option>
         </Select>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="overdue" value="1" defaultChecked={f.overdue === '1'} className="size-4" />
-          Overdue only
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="mine" value="1" defaultChecked={f.mine === '1'} className="size-4" />
-          Assigned to me
-        </label>
-        <div className="flex gap-2 md:col-span-4">
+        <Select name="overdue" defaultValue={f.overdue ?? ''} aria-label="Due">
+          <option value="">Any due date</option>
+          <option value="true">Overdue only</option>
+        </Select>
+        <div className="flex gap-2">
+          {f.site ? <input type="hidden" name="site" value={f.site} /> : null}
           <Button type="submit">Apply</Button>
           <Link href="/corrective-actions" className={buttonVariants({ variant: 'ghost' })}>
             Reset
@@ -88,54 +64,56 @@ export default async function CorrectiveActionsPage({ searchParams }: { searchPa
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <SortHeader label="Action" column="action_number" {...sortProps} />
-            <SortHeader label="Site" column="site_code" {...sortProps} />
-            <TableHead>Work</TableHead>
-            <SortHeader label="Assignee" column="assignee_name" {...sortProps} />
-            <SortHeader label="Priority" column="priority" {...sortProps} />
-            <SortHeader label="Due" column="due_date" {...sortProps} />
-            <SortHeader label="Status" column="status" {...sortProps} />
+            <TableHead>Number</TableHead>
+            <TableHead>Action</TableHead>
+            <TableHead>Failure</TableHead>
+            <TableHead>Site</TableHead>
+            <TableHead>Assigned to</TableHead>
+            <TableHead>Due</TableHead>
+            <TableHead>Priority</TableHead>
+            <TableHead>Status</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.length === 0 ? (
-            <EmptyRow colSpan={7} message="No corrective actions match these filters." />
+          {page.items.length === 0 ? (
+            <EmptyRow colSpan={8} message="No corrective actions match these filters." />
           ) : (
-            rows.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell className="whitespace-nowrap">
-                  <Link href={`/corrective-actions/${r.id}`} className="font-medium hover:underline">
-                    {r.action_number}
+            page.items.map((a) => (
+              <TableRow key={a.id}>
+                <TableCell className="whitespace-nowrap font-medium">
+                  <Link href={`/corrective-actions/${a.id}`} className="hover:underline">
+                    {a.number}
                   </Link>
-                  {r.failure_number ? <span className="block text-xs text-muted-foreground">{r.failure_number}</span> : null}
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {r.site_code} · {r.site_name}
-                  {r.is_demo ? <Badge className="ml-2">Demo</Badge> : null}
-                </TableCell>
-                <TableCell className="max-w-md">
-                  <span className="line-clamp-2" title={r.description ?? ''}>
-                    {r.description}
-                  </span>
-                  <span className="text-xs text-muted-foreground">{PM_CATEGORY_LABELS[r.category!]}</span>
-                </TableCell>
-                <TableCell>{r.assignee_name ?? <Badge tone="warning">Unassigned</Badge>}</TableCell>
-                <TableCell>
-                  <StatusBadge status={r.priority!} tone={SEVERITY_TONE[r.priority!]} />
-                </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {r.due_date ?? '—'}
-                  {r.is_overdue ? <Badge tone="danger" className="ml-2">Overdue</Badge> : null}
                 </TableCell>
                 <TableCell>
-                  <StatusBadge status={r.status!} tone={CORRECTIVE_ACTION_STATUS_TONE[r.status!]} />
+                  <Link href={`/corrective-actions/${a.id}`} className="hover:underline">
+                    {a.title}
+                  </Link>
+                </TableCell>
+                <TableCell className="text-sm">
+                  <Link href={`/failures/${a.failure.id}`} className="hover:underline">
+                    {a.failure.number}
+                  </Link>{' '}
+                  <StatusBadge status={a.failure.severity} tone={SEVERITY_TONE[a.failure.severity]} />
+                </TableCell>
+                <TableCell className="whitespace-nowrap">{a.site.siteCode}</TableCell>
+                <TableCell>{a.assignedTo?.fullName ?? <span className="text-muted-foreground">Not assigned</span>}</TableCell>
+                <TableCell className="whitespace-nowrap">
+                  {a.dueDate ? formatDate(a.dueDate) : '—'}
+                  {a.dueDate && WORKING.includes(a.status) ? <p className={`text-xs ${a.dueDate < today ? 'text-danger' : 'text-muted-foreground'}`}>{dueText(a.dueDate, today)}</p> : null}
+                </TableCell>
+                <TableCell>
+                  <StatusBadge status={a.priority} tone={SEVERITY_TONE[a.priority]} />
+                </TableCell>
+                <TableCell>
+                  <StatusBadge status={a.status} tone={CORRECTIVE_ACTION_STATUS_TONE[a.status]} />
                 </TableCell>
               </TableRow>
             ))
           )}
         </TableBody>
       </Table>
-      <Pagination pathname="/corrective-actions" searchParams={sp} page={params.page} pageSize={params.pageSize} total={count ?? 0} />
+      <Pagination pathname="/corrective-actions" searchParams={sp} page={p.page} pageSize={p.pageSize} total={page.total} />
     </div>
   );
 }

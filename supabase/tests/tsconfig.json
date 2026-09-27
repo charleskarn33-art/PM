@@ -3,11 +3,7 @@
   "compilerOptions": {
     "types": ["node"],
     "lib": ["ES2022", "DOM"],
-    "noEmit": true,
-    // API tests import the web app's query modules (mirrors the vitest alias).
-    "paths": {
-      "@/*": ["../../apps/web/src/*"]
-    }
+    "noEmit": true
   },
-  "include": ["src/**/*.ts", "perf/**/*.ts", "vitest.config.ts", "vitest.perf.config.ts"]
+  "include": ["src/**/*.ts", "vitest.config.ts"]
 }

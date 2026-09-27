@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  # The browser end-to-end suite (e2e/) signed in through a Supabase stand-in; sign-in now goes
-  # through the API, so that suite is retired and rebuilt on the API in Phase 14 (Testing).
+  # The browser end-to-end suite of the Supabase-era web was removed with it (Phase 9); an
+  # end-to-end suite on the API is added in Phase 14 (Testing).
   checks:
     runs-on: ubuntu-latest
     services:
@@ -35,8 +35,6 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
-      - name: Fetch PostgREST (API integration tests)
-        run: pnpm tools:postgrest
       - name: Database migrations, RLS, workflow and API tests
         run: pnpm test:db
       - name: Generated database types are up to date
@@ -44,8 +42,7 @@ jobs:
       - name: Web production build
         run: pnpm --filter @ipt/web build
         env:
-          NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
-          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ci-placeholder-key
+          API_URL: https://api.ci-placeholder.invalid
           NEXT_TELEMETRY_DISABLED: '1'
       - name: Mobile Android bundle
         run: pnpm --filter @ipt/mobile bundle:check

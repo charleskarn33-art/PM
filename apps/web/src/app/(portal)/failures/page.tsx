@@ -1,11 +1,9 @@
-import { can, FAILURE_STATUS_TONE, humanizeStatus, PM_CATEGORIES, PM_CATEGORY_LABELS, SEVERITIES, SEVERITY_TONE } from '@ipt/shared';
+import { FAILURE_STATUS_TONE, PM_CATEGORY_LABELS, SEVERITY_TONE } from '@ipt/shared';
 import { Plus, Search } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
-import { SortHeader } from '@/components/data-table/sort-header';
+import { EmptyRow } from '@/components/empty-row';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -13,94 +11,69 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { requireRole } from '@/lib/auth';
-import { createClient } from '@/lib/supabase/server';
-import { FAILURE_STATUSES, failureListQuery } from '@/lib/list-queries';
-import { isBeyondLastPage, pageRange, parseTableParams, tableHref, type SearchParams } from '@/lib/table-params';
-import { ExportLink } from '@/components/export-link';
+import { loadPage, qs } from '@/lib/api/data';
+import type { FailureSummary } from '@/lib/api/types';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { formatDate } from '@/lib/format';
+import { parseTableParams, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'Failures' };
 
-const SORTS = ['detected_at', 'failure_number', 'site_code', 'severity', 'status', 'category'] as const;
-const STATUSES = FAILURE_STATUSES;
-const when = (v: string | null) => (v ? new Date(v).toLocaleDateString('en-GB', { dateStyle: 'medium' }) : '—');
+const STATUSES = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'VERIFIED', 'CLOSED'] as const;
 
 export default async function FailuresPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
-  const session = await requireRole(['super_admin', 'regional_manager', 'regional_supervisor', 'viewer']);
-  const params = parseTableParams(sp, {
-    sortable: SORTS,
-    defaultSort: 'detected_at',
-    defaultDir: 'desc',
-    filters: ['status', 'severity', 'category', 'source', 'from', 'to'],
-  });
-  const f = params.filters;
-  const status = f.status ?? 'ACTIVE';
-  const supabase = await createClient();
-
-  const query = failureListQuery(supabase, params.q, f);
-  const { from, to } = pageRange(params.page, params.pageSize);
-  const { data, count, error } = await query.order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false }).range(from, to);
-  if (isBeyondLastPage(error)) redirect(tableHref('/failures', sp, { page: null }));
-  if (error) throw new Error(`Unable to load failures: ${error.message}`);
-  const rows = data ?? [];
-  const sortProps = { pathname: '/failures', searchParams: sp, sort: params.sort, dir: params.dir };
-
+  const session = await requirePermission('failures.read');
+  const p = parseTableParams(sp, { sortable: ['detected'] as const, defaultSort: 'detected', filters: ['status', 'severity', 'source', 'site', 'visit', 'from', 'to'] });
+  const f = p.filters;
+  const status = f.status ?? (sp.status === undefined ? 'active' : undefined);
+  const page = await loadPage<FailureSummary>(
+    `/failures${qs({ status, severity: f.severity, source: f.source, siteId: f.site, visitId: f.visit, q: p.q, from: f.from, to: f.to, page: p.page, pageSize: p.pageSize })}`,
+  );
   return (
     <div className="space-y-6">
       <PageHeader
         title="Failures"
-        description="Failures recorded in submitted PMs and reported manually, with their corrective-action progress."
+        description="Failures recorded from completed PMs or reported on site, in your scope. Open failures are shown first by default."
         actions={
-          <div className="flex gap-2">
-            <ExportLink href="/failures/export" searchParams={sp} />
-            {can(session.role, 'manage_corrective_actions') ? (
-              <Link href="/failures/new" className={buttonVariants()}>
-                <Plus aria-hidden />
-                Report failure
-              </Link>
-            ) : null}
-          </div>
+          hasPermission(session, 'failures.report') ? (
+            <Link href="/failures/new" className={buttonVariants({ variant: 'accent' })}>
+              <Plus aria-hidden />
+              Report failure
+            </Link>
+          ) : null
         }
       />
-      <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">
+      <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-6">
         <div className="relative md:col-span-2">
           <Search className="absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />
-          <Input name="q" defaultValue={params.q} placeholder="Failure no., site or description" className="pl-9" aria-label="Search" />
+          <Input name="q" defaultValue={p.q} placeholder="Title or number (FL-000012)" className="pl-9" aria-label="Search failures" />
         </div>
-        <Select name="status" defaultValue={status} aria-label="Status">
-          <option value="ACTIVE">Not yet verified</option>
-          <option value="ALL">All statuses</option>
+        <Select name="status" defaultValue={status ?? ''} aria-label="Status">
+          <option value="active">Not closed</option>
+          <option value="">Any status</option>
           {STATUSES.map((s) => (
             <option key={s} value={s}>
-              {humanizeStatus(s)}
+              {s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ')}
             </option>
           ))}
         </Select>
         <Select name="severity" defaultValue={f.severity ?? ''} aria-label="Severity">
-          <option value="">All severities</option>
-          {SEVERITIES.map((s) => (
+          <option value="">Any severity</option>
+          {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'].map((s) => (
             <option key={s} value={s}>
-              {humanizeStatus(s)}
-            </option>
-          ))}
-        </Select>
-        <Select name="category" defaultValue={f.category ?? ''} aria-label="Category">
-          <option value="">All sections</option>
-          {PM_CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {PM_CATEGORY_LABELS[c]}
+              {s.charAt(0) + s.slice(1).toLowerCase()}
             </option>
           ))}
         </Select>
         <Select name="source" defaultValue={f.source ?? ''} aria-label="Source">
-          <option value="">PM and manual</option>
+          <option value="">Any source</option>
           <option value="PM_CHECKLIST">From PM checklist</option>
-          <option value="MANUAL">Reported manually</option>
+          <option value="MANUAL">Reported on site</option>
         </Select>
-        <Input type="date" name="from" defaultValue={f.from} aria-label="Detected from" />
-        <Input type="date" name="to" defaultValue={f.to} aria-label="Detected to" />
-        <div className="flex gap-2 md:col-span-4">
+        <div className="flex gap-2">
+          {f.site ? <input type="hidden" name="site" value={f.site} /> : null}
+          {f.visit ? <input type="hidden" name="visit" value={f.visit} /> : null}
           <Button type="submit">Apply</Button>
           <Link href="/failures" className={buttonVariants({ variant: 'ghost' })}>
             Reset
@@ -110,57 +83,54 @@ export default async function FailuresPage({ searchParams }: { searchParams: Pro
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <SortHeader label="Failure" column="failure_number" {...sortProps} />
-            <SortHeader label="Site" column="site_code" {...sortProps} />
-            <SortHeader label="Section" column="category" {...sortProps} />
-            <TableHead>Description</TableHead>
-            <SortHeader label="Severity" column="severity" {...sortProps} />
-            <SortHeader label="Status" column="status" {...sortProps} />
-            <SortHeader label="Detected" column="detected_at" {...sortProps} />
-            <TableHead>Actions</TableHead>
+            <TableHead>Number</TableHead>
+            <TableHead>Failure</TableHead>
+            <TableHead>Site</TableHead>
+            <TableHead>Area</TableHead>
+            <TableHead>Detected</TableHead>
+            <TableHead>Severity</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.length === 0 ? (
+          {page.items.length === 0 ? (
             <EmptyRow colSpan={8} message="No failures match these filters." />
           ) : (
-            rows.map((r) => (
-              <TableRow key={r.id}>
-                <TableCell className="whitespace-nowrap">
-                  <Link href={`/failures/${r.id}`} className="font-medium hover:underline">
-                    {r.failure_number}
+            page.items.map((x) => (
+              <TableRow key={x.id}>
+                <TableCell className="whitespace-nowrap font-medium">
+                  <Link href={`/failures/${x.id}`} className="hover:underline">
+                    {x.number}
                   </Link>
                 </TableCell>
-                <TableCell className="whitespace-nowrap">
-                  {r.site_code} · {r.site_name}
-                  {r.is_demo ? <Badge className="ml-2">Demo</Badge> : null}
+                <TableCell>
+                  <Link href={`/failures/${x.id}`} className="hover:underline">
+                    {x.title}
+                  </Link>
+                  {!x.stillReported ? (
+                    <Badge tone="neutral" className="ml-2">
+                      No longer reported
+                    </Badge>
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">{x.source === 'MANUAL' ? `Reported by ${x.reportedBy?.fullName ?? '—'}` : 'From PM checklist'}</p>
                 </TableCell>
-                <TableCell className="whitespace-nowrap">{PM_CATEGORY_LABELS[r.category!]}</TableCell>
-                <TableCell className="max-w-md truncate" title={r.description ?? ''}>
-                  {r.description}
+                <TableCell className="whitespace-nowrap">{x.site.siteCode}</TableCell>
+                <TableCell>{x.category ? (PM_CATEGORY_LABELS[x.category as keyof typeof PM_CATEGORY_LABELS] ?? x.category) : '—'}</TableCell>
+                <TableCell className="whitespace-nowrap">{formatDate(x.detectedAt)}</TableCell>
+                <TableCell>
+                  <StatusBadge status={x.severity} tone={SEVERITY_TONE[x.severity]} />
                 </TableCell>
                 <TableCell>
-                  <StatusBadge status={r.severity!} tone={SEVERITY_TONE[r.severity!]} />
+                  <StatusBadge status={x.status} tone={FAILURE_STATUS_TONE[x.status]} />
                 </TableCell>
-                <TableCell>
-                  <StatusBadge status={r.status!} tone={FAILURE_STATUS_TONE[r.status!]} />
-                </TableCell>
-                <TableCell className="whitespace-nowrap">{when(r.detected_at)}</TableCell>
-                <TableCell>
-                  {r.action_count ? (
-                    <span className="text-sm">
-                      {r.open_action_count} open / {r.action_count}
-                    </span>
-                  ) : (
-                    <Badge tone="warning">None</Badge>
-                  )}
-                </TableCell>
+                <TableCell className="text-right tabular-nums">{x._count?.actions ?? 0}</TableCell>
               </TableRow>
             ))
           )}
         </TableBody>
       </Table>
-      <Pagination pathname="/failures" searchParams={sp} page={params.page} pageSize={params.pageSize} total={count ?? 0} />
+      <Pagination pathname="/failures" searchParams={sp} page={p.page} pageSize={p.pageSize} total={page.total} />
     </div>
   );
 }

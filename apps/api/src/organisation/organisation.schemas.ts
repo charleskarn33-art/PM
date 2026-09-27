@@ -61,6 +61,13 @@ export const SiteListQuery = z.strictObject({
   clusterId: uuid.optional(),
   countyId: uuid.optional(),
   status: z.enum(['ACTIVE', 'INACTIVE', 'DECOMMISSIONED']).optional(),
+  /** Sites with this active supervisor / technician. */
+  supervisorId: uuid.optional(),
+  technicianId: uuid.optional(),
+  /** overdue: an overdue PM; scheduled: an open PM, none overdue; none: no open PM. */
+  pm: z.enum(['overdue', 'scheduled', 'none']).optional(),
+  sort: z.enum(['siteCode', 'siteName', 'region', 'status']).default('siteCode'),
+  dir: z.enum(['asc', 'desc']).default('asc'),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });

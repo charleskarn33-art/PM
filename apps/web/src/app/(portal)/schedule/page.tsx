@@ -1,69 +1,45 @@
-import { can, humanizeStatus, PM_STATUS_TONE, type Enums } from '@ipt/shared';
-import { Plus, Search } from 'lucide-react';
+import { PM_STATUS_TONE, SEVERITY_TONE } from '@ipt/shared';
+import { Plus } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { EmptyRow } from '@/components/empty-row';
 import { Pagination } from '@/components/data-table/pagination';
-import { SortHeader } from '@/components/data-table/sort-header';
+import { EmptyRow } from '@/components/empty-row';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
-import { Alert } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { requireRole } from '@/lib/auth';
-import { loadRegions } from '@/lib/org-data';
-import { createClient } from '@/lib/supabase/server';
-import { isBeyondLastPage, pageRange, parseTableParams, tableHref, toIlikePattern, type SearchParams } from '@/lib/table-params';
+import { loadAll, loadPage, qs } from '@/lib/api/data';
+import type { Schedule, UserSummary } from '@/lib/api/types';
+import { hasPermission, requirePermission } from '@/lib/auth';
+import { dueText, formatDate } from '@/lib/format';
+import { parseTableParams, type SearchParams } from '@/lib/table-params';
 
 export const metadata: Metadata = { title: 'PM Schedule' };
 
-const SORTS = ['due_date', 'scheduled_date', 'site_code', 'technician_name', 'status', 'priority'] as const;
-const STATUSES: Enums<'pm_status'>[] = ['SCHEDULED', 'OVERDUE', 'IN_PROGRESS', 'COMPLETED', 'SUBMITTED', 'APPROVED', 'REJECTED', 'CANCELLED'];
-const date = (v: string | null) => (v ? new Date(v).toLocaleDateString('en-GB') : '—');
+const STATUSES = ['SCHEDULED', 'OVERDUE', 'IN_PROGRESS', 'COMPLETED', 'APPROVED', 'REJECTED', 'CANCELLED'] as const;
+const OPEN = ['SCHEDULED', 'OVERDUE', 'IN_PROGRESS', 'REJECTED'];
 
 export default async function SchedulePage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const sp = await searchParams;
-  const session = await requireRole(['super_admin', 'regional_manager', 'regional_supervisor', 'viewer']);
-  const params = parseTableParams(sp, {
-    sortable: SORTS,
-    defaultSort: 'due_date',
-    filters: ['status', 'region', 'due_from', 'due_to', 'overdue', 'created'],
-  });
-  const f = params.filters;
-  const supabase = await createClient();
-
-  let query = supabase.from('pm_schedule_overview').select('*', { count: 'exact' });
-  if (f.status && (STATUSES as string[]).includes(f.status)) query = query.eq('status', f.status as Enums<'pm_status'>);
-  else if (!f.status) query = query.neq('status', 'CANCELLED');
-  if (f.overdue === '1') query = query.eq('is_overdue', true);
-  if (f.region) query = query.eq('region_id', f.region);
-  if (f.due_from) query = query.gte('due_date', f.due_from);
-  if (f.due_to) query = query.lte('due_date', f.due_to);
-  if (params.q) {
-    const p = toIlikePattern(params.q);
-    query = query.or(`site_code.ilike.${p},site_name.ilike.${p},technician_name.ilike.${p}`);
-  }
-  const { from, to } = pageRange(params.page, params.pageSize);
-  const [{ data, count, error }, regions] = await Promise.all([
-    query.order(params.sort, { ascending: params.dir === 'asc', nullsFirst: false }).order('site_code').range(from, to),
-    loadRegions(supabase),
+  const session = await requirePermission('pm_schedules.read');
+  const p = parseTableParams(sp, { sortable: ['due'] as const, defaultSort: 'due', filters: ['status', 'technician', 'site', 'from', 'to'] });
+  const f = p.filters;
+  const [page, technicians] = await Promise.all([
+    loadPage<Schedule>(`/pm-schedules${qs({ status: f.status, technicianId: f.technician, siteId: f.site, from: f.from, to: f.to, page: p.page, pageSize: p.pageSize })}`),
+    hasPermission(session, 'users.read') ? loadAll<UserSummary>('/users?role=TECHNICIAN') : Promise.resolve([] as UserSummary[]),
   ]);
-  if (isBeyondLastPage(error)) redirect(tableHref('/schedule', sp, { page: null }));
-  if (error) throw new Error(`Unable to load PM schedule: ${error.message}`);
-  const rows = data ?? [];
-  const sortProps = { pathname: '/schedule', searchParams: sp, sort: params.sort, dir: params.dir };
+  const today = new Date().toISOString().slice(0, 10);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="PM Schedule"
-        description="Planned preventive maintenance by site and technician."
+        description="Planned preventive maintenance in your scope, earliest due first. Overdue PMs are marked every hour."
         actions={
-          can(session.role, 'schedule_pm') ? (
+          hasPermission(session, 'pm_schedules.manage') ? (
             <Link href="/schedule/new" className={buttonVariants({ variant: 'accent' })}>
               <Plus aria-hidden />
               Schedule PM
@@ -71,35 +47,41 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
           ) : null
         }
       />
-      {f.created ? <Alert tone="success">{f.created} PM schedule(s) created.</Alert> : null}
-      <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-3 xl:grid-cols-6">
-        <div className="relative md:col-span-3 xl:col-span-2">
-          <Search className="absolute left-3 top-3 size-4 text-muted-foreground" aria-hidden />
-          <Input name="q" defaultValue={params.q} placeholder="Site ID, site name or technician" className="pl-9" aria-label="Search" />
+      <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-5 md:items-end">
+        <div className="space-y-1.5">
+          <Label htmlFor="status">Status</Label>
+          <Select id="status" name="status" defaultValue={f.status ?? ''}>
+            <option value="">Any</option>
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s.charAt(0) + s.slice(1).toLowerCase().replace('_', ' ')}
+              </option>
+            ))}
+          </Select>
         </div>
-        <Select name="status" defaultValue={f.status ?? ''} aria-label="Status">
-          <option value="">All open & closed (excl. cancelled)</option>
-          {STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {humanizeStatus(s)}
-            </option>
-          ))}
-        </Select>
-        <Select name="region" defaultValue={f.region ?? ''} aria-label="Region">
-          <option value="">All regions</option>
-          {regions.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.name}
-            </option>
-          ))}
-        </Select>
-        <Input type="date" name="due_from" defaultValue={f.due_from} aria-label="Due from" />
-        <Input type="date" name="due_to" defaultValue={f.due_to} aria-label="Due to" />
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" name="overdue" value="1" defaultChecked={f.overdue === '1'} className="size-4" />
-          Overdue only
-        </label>
-        <div className="flex gap-2 md:col-span-2 xl:col-span-5">
+        {technicians.length ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="technician">Technician</Label>
+            <Select id="technician" name="technician" defaultValue={f.technician ?? ''}>
+              <option value="">Anyone</option>
+              {technicians.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.fullName}
+                </option>
+              ))}
+            </Select>
+          </div>
+        ) : null}
+        <div className="space-y-1.5">
+          <Label htmlFor="from">Scheduled from</Label>
+          <Input id="from" name="from" type="date" defaultValue={f.from ?? ''} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="to">to</Label>
+          <Input id="to" name="to" type="date" defaultValue={f.to ?? ''} />
+        </div>
+        <div className="flex gap-2">
+          {f.site ? <input type="hidden" name="site" value={f.site} /> : null}
           <Button type="submit">Apply</Button>
           <Link href="/schedule" className={buttonVariants({ variant: 'ghost' })}>
             Reset
@@ -109,52 +91,47 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <SortHeader label="Site" column="site_code" {...sortProps} />
-            <SortHeader label="Technician" column="technician_name" {...sortProps} />
-            <TableHead>Frequency</TableHead>
-            <SortHeader label="Scheduled" column="scheduled_date" {...sortProps} />
-            <SortHeader label="Due" column="due_date" {...sortProps} />
-            <SortHeader label="Status" column="status" {...sortProps} />
-            <SortHeader label="Priority" column="priority" {...sortProps} />
-            <TableHead>Template</TableHead>
+            <TableHead>Site</TableHead>
+            <TableHead>Technician</TableHead>
+            <TableHead>Checklist</TableHead>
+            <TableHead>Scheduled</TableHead>
+            <TableHead>Due</TableHead>
+            <TableHead>Priority</TableHead>
+            <TableHead>Status</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.length === 0 ? (
-            <EmptyRow colSpan={8} message="No PM schedules match these filters." />
+          {page.items.length === 0 ? (
+            <EmptyRow colSpan={7} message="No PM matches these filters." />
           ) : (
-            rows.map((s) => (
+            page.items.map((s) => (
               <TableRow key={s.id}>
-                <TableCell className="whitespace-nowrap">
-                  <Link href={`/schedule/${s.id}`} className="font-medium hover:underline">
-                    {s.site_code} · {s.site_name}
+                <TableCell className="font-medium">
+                  <Link href={`/schedule/${s.id}`} className="hover:underline">
+                    {s.site.siteCode} · {s.site.siteName}
                   </Link>
-                  {s.is_demo ? <Badge className="ml-2">Demo</Badge> : null}
                 </TableCell>
-                <TableCell>{s.technician_name ?? <span className="text-warning">Unassigned</span>}</TableCell>
-                <TableCell>{humanizeStatus(s.frequency ?? '')}</TableCell>
-                <TableCell className="whitespace-nowrap">{date(s.scheduled_date)}</TableCell>
-                <TableCell className="whitespace-nowrap">{date(s.due_date)}</TableCell>
+                <TableCell>{s.technician?.fullName ?? <span className="text-muted-foreground">Unassigned</span>}</TableCell>
+                <TableCell className="text-sm">
+                  {s.template.name} v{s.template.version}
+                </TableCell>
+                <TableCell className="whitespace-nowrap">{formatDate(s.scheduledDate)}</TableCell>
                 <TableCell className="whitespace-nowrap">
-                  {s.is_overdue && s.status !== 'OVERDUE' ? (
-                    <span className="flex gap-1">
-                      <StatusBadge status={s.status!} tone={PM_STATUS_TONE[s.status!]} />
-                      <StatusBadge status="OVERDUE" tone="danger" />
-                    </span>
-                  ) : (
-                    <StatusBadge status={s.status!} tone={PM_STATUS_TONE[s.status!]} />
-                  )}
+                  {formatDate(s.dueDate)}
+                  {OPEN.includes(s.status) ? <p className={`text-xs ${s.dueDate < today ? 'text-danger' : 'text-muted-foreground'}`}>{dueText(s.dueDate, today)}</p> : null}
                 </TableCell>
                 <TableCell>
-                  <Badge tone={s.priority === 'CRITICAL' || s.priority === 'HIGH' ? 'danger' : 'neutral'}>{humanizeStatus(s.priority ?? '')}</Badge>
+                  <StatusBadge status={s.priority} tone={SEVERITY_TONE[s.priority]} />
                 </TableCell>
-                <TableCell className="whitespace-nowrap text-muted-foreground">v{s.template_version}</TableCell>
+                <TableCell>
+                  <StatusBadge status={s.status} tone={PM_STATUS_TONE[s.status]} />
+                </TableCell>
               </TableRow>
             ))
           )}
         </TableBody>
       </Table>
-      <Pagination pathname="/schedule" searchParams={sp} page={params.page} pageSize={params.pageSize} total={count ?? 0} />
+      <Pagination pathname="/schedule" searchParams={sp} page={p.page} pageSize={p.pageSize} total={page.total} />
     </div>
   );
 }

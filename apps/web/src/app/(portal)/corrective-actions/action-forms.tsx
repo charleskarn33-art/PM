@@ -1,109 +1,49 @@
 'use client';
 
-import { humanizeStatus, PRIORITIES, ROLE_LABELS, type AppRole } from '@ipt/shared';
+import { humanizeStatus } from '@ipt/shared';
 import { useActionState } from 'react';
-import { Alert } from '@/components/ui/alert';
+import { FieldError, FormMessages } from '@/components/form-bits';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { FormSelect } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { addActionNote, changeActionStatus, returnCorrectiveAction, updateCorrectiveAction, type ActionFormState } from './actions';
+import type { FormState } from '@/lib/form-action';
+import { actionStep, updateAction } from './actions';
 
-function Messages({ state }: { state: ActionFormState }) {
+type Ids = { id: string; failureId: string };
+
+function Hidden({ id, failureId, step }: Ids & { step: string }) {
   return (
     <>
-      {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
-      {state.success ? <Alert tone="success">{state.success}</Alert> : null}
+      <input type="hidden" name="id" value={id} />
+      <input type="hidden" name="failureId" value={failureId} />
+      <input type="hidden" name="step" value={step} />
     </>
   );
 }
-const FieldError = ({ message }: { message?: string }) => (message ? <p className="text-xs text-danger">{message}</p> : null);
 
-export function EditActionForm({
-  action: a,
-  assignees,
-}: {
-  action: { id: string; description: string; priority: string; assigned_to: string | null; due_date: string | null };
-  assignees: { id: string; full_name: string; role: AppRole }[];
-}) {
-  const [state, action, pending] = useActionState<ActionFormState, FormData>(updateCorrectiveAction, {});
-  const v = state.values;
-  const e = state.fieldErrors ?? {};
-  const options = a.assigned_to && !assignees.some((x) => x.id === a.assigned_to) ? [{ id: a.assigned_to, full_name: 'Current assignee', role: 'technician' as AppRole }, ...assignees] : assignees;
-  return (
-    <form action={action} className="space-y-3">
-      <input type="hidden" name="id" value={a.id} />
-      <Messages state={state} />
-      <div className="space-y-1.5">
-        <Label htmlFor="edit-description">Work to be done</Label>
-        <Textarea id="edit-description" name="description" required defaultValue={v?.description ?? a.description} />
-        <FieldError message={e.description} />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="edit-assignee">Assigned to</Label>
-          <FormSelect id="edit-assignee" name="assigned_to" defaultValue={v?.assigned_to ?? a.assigned_to ?? ''}>
-            <option value="">Not assigned</option>
-            {options.map((x) => (
-              <option key={x.id} value={x.id}>
-                {x.full_name} ({ROLE_LABELS[x.role]})
-              </option>
-            ))}
-          </FormSelect>
-          <FieldError message={e.assigned_to} />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="edit-priority">Priority</Label>
-          <FormSelect id="edit-priority" name="priority" defaultValue={v?.priority ?? a.priority}>
-            {PRIORITIES.map((p) => (
-              <option key={p} value={p}>
-                {humanizeStatus(p)}
-              </option>
-            ))}
-          </FormSelect>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="edit-due">Due date</Label>
-          <Input id="edit-due" name="due_date" type="date" defaultValue={v?.due_date ?? a.due_date ?? ''} />
-          <FieldError message={e.due_date} />
-        </div>
-      </div>
-      <Button type="submit" size="sm" disabled={pending}>
-        Save changes
-      </Button>
-    </form>
-  );
-}
-
-/** One-click status change (start work, verify, close after verification). */
-export function StatusButton({ id, status, label, variant }: { id: string; status: string; label: string; variant?: 'outline' }) {
-  const [state, action, pending] = useActionState<ActionFormState, FormData>(changeActionStatus, {});
+export function StartForm(ids: Ids) {
+  const [state, action, pending] = useActionState<FormState, FormData>(actionStep, {});
   return (
     <form action={action} className="space-y-2">
-      <input type="hidden" name="id" value={id} />
-      <input type="hidden" name="status" value={status} />
-      <Messages state={state} />
-      <Button type="submit" variant={variant} disabled={pending}>
-        {label}
+      <Hidden {...ids} step="start" />
+      <FormMessages state={state} />
+      <Button type="submit" disabled={pending}>
+        Start work
       </Button>
     </form>
   );
 }
 
-export function CompleteForm({ id }: { id: string }) {
-  const [state, action, pending] = useActionState<ActionFormState, FormData>(changeActionStatus, {});
-  const e = state.fieldErrors ?? {};
+export function CompleteForm(ids: Ids) {
+  const [state, action, pending] = useActionState<FormState, FormData>(actionStep, {});
   return (
-    <form action={action} className="space-y-3">
-      <input type="hidden" name="id" value={id} />
-      <input type="hidden" name="status" value="COMPLETED" />
-      <Messages state={state} />
-      <div className="space-y-1.5">
-        <Label htmlFor="resolution">What was done</Label>
-        <Textarea id="resolution" name="resolution" required defaultValue={state.values?.resolution} placeholder="Parts replaced, tests performed, readings after repair" />
-        <FieldError message={e.resolution} />
-      </div>
+    <form action={action} className="space-y-2">
+      <Hidden {...ids} step="complete" />
+      <FormMessages state={state} />
+      <Label htmlFor="c-note">What was done</Label>
+      <Textarea id="c-note" name="note" required maxLength={2000} defaultValue={state.values?.note} />
       <Button type="submit" disabled={pending}>
         Mark completed
       </Button>
@@ -111,60 +51,107 @@ export function CompleteForm({ id }: { id: string }) {
   );
 }
 
-export function CloseWithNoteForm({ id }: { id: string }) {
-  const [state, action, pending] = useActionState<ActionFormState, FormData>(changeActionStatus, {});
-  const e = state.fieldErrors ?? {};
+export function VerifyForm(ids: Ids) {
+  const [state, action, pending] = useActionState<FormState, FormData>(actionStep, {});
   return (
-    <form action={action} className="space-y-3">
-      <input type="hidden" name="id" value={id} />
-      <input type="hidden" name="status" value="CLOSED" />
-      <input type="hidden" name="require_note" value="1" />
-      <Messages state={state} />
-      <div className="space-y-1.5">
-        <Label htmlFor="close-note">Reason for closing without completing the work</Label>
-        <Textarea id="close-note" name="note" defaultValue={state.values?.note} placeholder="e.g. Raised in error; covered by CA-000031" />
-        <FieldError message={e.note} />
+    <form action={action} className="space-y-2">
+      <Hidden {...ids} step="verify" />
+      <FormMessages state={state} />
+      <Label htmlFor="v-note">Verification note</Label>
+      <Textarea id="v-note" name="note" maxLength={2000} placeholder="Required when sending it back: what must be redone?" defaultValue={state.values?.note} />
+      <FieldError message={state.fieldErrors?.note} />
+      <div className="flex gap-2">
+        <Button type="submit" name="decision" value="APPROVE" disabled={pending}>
+          Verify
+        </Button>
+        <Button type="submit" name="decision" value="REJECT" variant="destructive" disabled={pending}>
+          Send back
+        </Button>
       </div>
-      <Button type="submit" variant="outline" disabled={pending}>
-        Close action
+    </form>
+  );
+}
+
+export function CloseForm({ withdraw, ...ids }: Ids & { withdraw: boolean }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(actionStep, {});
+  return (
+    <form action={action} className="space-y-2">
+      <Hidden {...ids} step="close" />
+      <FormMessages state={state} />
+      <Label htmlFor="x-note">{withdraw ? 'Why is it withdrawn?' : 'Closing note (optional)'}</Label>
+      <Textarea id="x-note" name="note" required={withdraw} maxLength={2000} defaultValue={state.values?.note} />
+      <Button type="submit" variant={withdraw ? 'outline' : 'default'} disabled={pending}>
+        {withdraw ? 'Withdraw action' : 'Close action'}
       </Button>
     </form>
   );
 }
 
-export function ReturnForm({ id }: { id: string }) {
-  const [state, action, pending] = useActionState<ActionFormState, FormData>(returnCorrectiveAction, {});
-  const e = state.fieldErrors ?? {};
+export function AssignForm({ assignees, current, dueDate, ...ids }: Ids & { assignees: { id: string; label: string }[]; current: string | null; dueDate: string | null }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(actionStep, {});
   return (
-    <form action={action} className="space-y-3">
-      <input type="hidden" name="id" value={id} />
-      <Messages state={state} />
-      <div className="space-y-1.5">
-        <Label htmlFor="return-note">What still needs to be done</Label>
-        <Textarea id="return-note" name="note" defaultValue={state.values?.note} />
-        <FieldError message={e.note} />
+    <form action={action} className="space-y-2">
+      <Hidden {...ids} step="assign" />
+      <FormMessages state={state} />
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="as-user">{current ? 'Reassign to' : 'Assign to'}</Label>
+          <FormSelect id="as-user" name="assignedToId" required defaultValue={state.values?.assignedToId ?? current ?? ''}>
+            <option value="" disabled>
+              Select…
+            </option>
+            {assignees.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.label}
+              </option>
+            ))}
+          </FormSelect>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="as-due">Due date</Label>
+          <Input id="as-due" name="dueDate" type="date" defaultValue={state.values?.dueDate ?? dueDate ?? ''} />
+        </div>
       </div>
-      <Button type="submit" variant="outline" disabled={pending}>
-        Return to assignee
+      <Button type="submit" variant="outline" disabled={pending || assignees.length === 0}>
+        {current ? 'Reassign' : 'Assign'}
       </Button>
     </form>
   );
 }
 
-export function NoteForm({ id }: { id: string }) {
-  const [state, action, pending] = useActionState<ActionFormState, FormData>(addActionNote, {});
-  const e = state.fieldErrors ?? {};
+export function EditActionForm({ action: a }: { action: { id: string; title: string; description: string | null; priority: string; dueDate: string | null } }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(updateAction, {});
+  const v = (k: string, d: string | null) => state.values?.[k] ?? d ?? '';
   return (
-    <form action={action} className="space-y-3">
-      <input type="hidden" name="id" value={id} />
-      <Messages state={state} />
+    <form action={action} className="space-y-2">
+      <input type="hidden" name="id" value={a.id} />
+      <FormMessages state={state} />
       <div className="space-y-1.5">
-        <Label htmlFor="note">Add a note</Label>
-        <Textarea id="note" name="note" defaultValue={state.success ? '' : state.values?.note} key={state.success ?? 'note'} />
-        <FieldError message={e.note} />
+        <Label htmlFor="e-title">Work to be done</Label>
+        <Input id="e-title" name="title" required maxLength={255} defaultValue={v('title', a.title)} />
       </div>
-      <Button type="submit" size="sm" variant="outline" disabled={pending}>
-        Add note
+      <div className="space-y-1.5">
+        <Label htmlFor="e-description">Details</Label>
+        <Textarea id="e-description" name="description" maxLength={4000} defaultValue={v('description', a.description)} />
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="e-priority">Priority</Label>
+          <FormSelect id="e-priority" name="priority" defaultValue={v('priority', a.priority)}>
+            {['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].map((p) => (
+              <option key={p} value={p}>
+                {humanizeStatus(p)}
+              </option>
+            ))}
+          </FormSelect>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="e-due">Due date</Label>
+          <Input id="e-due" name="dueDate" type="date" defaultValue={v('dueDate', a.dueDate)} />
+        </div>
+      </div>
+      <Button type="submit" variant="outline" disabled={pending}>
+        Save
       </Button>
     </form>
   );

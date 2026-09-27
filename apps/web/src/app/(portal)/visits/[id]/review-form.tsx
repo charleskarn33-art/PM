@@ -1,32 +1,33 @@
 'use client';
 
-import { Check, X } from 'lucide-react';
+import { Check, Undo2 } from 'lucide-react';
 import { useActionState } from 'react';
-import { Alert } from '@/components/ui/alert';
+import { FieldError, FormMessages } from '@/components/form-bits';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { reviewVisit, type ReviewState } from '../actions';
+import type { FormState } from '@/lib/form-action';
+import { reviewVisit } from '../actions';
 
 export function ReviewForm({ visitId }: { visitId: string }) {
-  const [state, action, pending] = useActionState<ReviewState, FormData>(reviewVisit, {});
+  const [state, action, pending] = useActionState<FormState, FormData>(reviewVisit, {});
   return (
     <form action={action} className="space-y-3">
-      <input type="hidden" name="visit_id" value={visitId} />
-      {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
-      {state.success ? <Alert tone="success">{state.success}</Alert> : null}
+      <input type="hidden" name="visitId" value={visitId} />
+      <FormMessages state={state} />
       <div className="space-y-1.5">
-        <Label htmlFor="review_comments">Review comments</Label>
-        <Textarea id="review_comments" name="review_comments" placeholder="Required when rejecting: what must the technician correct?" />
+        <Label htmlFor="comments">Review comments</Label>
+        <Textarea id="comments" name="comments" maxLength={2000} defaultValue={state.values?.comments} placeholder="Required when returning it: what must the technician correct?" />
+        <FieldError message={state.fieldErrors?.comments} />
       </div>
       <div className="flex gap-2">
-        <Button type="submit" name="decision" value="APPROVED" disabled={pending}>
+        <Button type="submit" name="decision" value="APPROVE" disabled={pending}>
           <Check aria-hidden />
           Approve
         </Button>
-        <Button type="submit" name="decision" value="REJECTED" variant="destructive" disabled={pending}>
-          <X aria-hidden />
-          Reject
+        <Button type="submit" name="decision" value="REJECT" variant="destructive" disabled={pending}>
+          <Undo2 aria-hidden />
+          Return for correction
         </Button>
       </div>
     </form>

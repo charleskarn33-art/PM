@@ -1,72 +1,68 @@
 'use server';
 
-import { toIsoDate, validateSite, type FieldErrors, type SiteField } from '@ipt/shared';
-import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { requireCapability, requireSession } from '@/lib/auth';
-import { formValues, type FormValues } from '@/lib/form-values';
-import { createClient } from '@/lib/supabase/server';
+import { ApiError } from '@/lib/api/client';
+import { api } from '@/lib/api/server';
+import { requireSession } from '@/lib/auth';
+import { fieldErrorsOf, messageOf, submit, text, type FormState } from '@/lib/form-action';
+import { formValues } from '@/lib/form-values';
 
-export interface SiteFormState {
-  error?: string;
-  fieldErrors?: FieldErrors<SiteField>;
-  values?: FormValues;
-}
+const num = (formData: FormData, key: string): number | null => {
+  const v = text(formData, key);
+  return v === undefined ? null : Number(v);
+};
 
-export async function saveSite(_prev: SiteFormState, formData: FormData): Promise<SiteFormState> {
-  await requireCapability('manage_organization');
-  const id = String(formData.get('id') ?? '');
-  const values = formValues(formData);
-  const result = validateSite(values);
-  if (!result.ok) return { error: 'Please correct the highlighted fields.', fieldErrors: result.errors, values };
-
-  const supabase = await createClient();
-  const query = id
-    ? supabase.from('sites').update(result.value).eq('id', id).select('id').single()
-    : supabase.from('sites').insert(result.value).select('id').single();
-  const { data, error } = await query;
-  if (error) {
-    if (error.code === '23505') return { fieldErrors: { site_code: 'This Site ID already exists.' }, values };
-    return { error: `Unable to save the site: ${error.message}`, values };
-  }
-  revalidatePath('/sites');
-  redirect(`/sites/${data.id}`);
-}
-
-export interface AssignmentState {
-  error?: string;
-  success?: string;
-}
-
-export async function assignTechnician(_prev: AssignmentState, formData: FormData): Promise<AssignmentState> {
-  await requireCapability('manage_assignments');
-  const siteId = String(formData.get('site_id') ?? '');
-  const technicianId = String(formData.get('technician_id') ?? '');
-  const startsOn = String(formData.get('starts_on') ?? '') || toIsoDate(new Date());
-  if (!technicianId) return { error: 'Select a technician.' };
-
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from('site_assignments')
-    .insert({ site_id: siteId, technician_id: technicianId, starts_on: startsOn });
-  if (error) {
-    if (error.code === '23505') return { error: 'This technician is already assigned to the site.' };
-    if (error.code === '42501') return { error: 'You are not allowed to manage assignments for this site.' };
-    return { error: `Unable to assign technician: ${error.message}` };
-  }
-  revalidatePath(`/sites/${siteId}`);
-  return { success: 'Technician assigned.' };
-}
-
-export async function endAssignment(formData: FormData): Promise<void> {
+/** Creates a site or saves changes; the API validates and returns field problems. */
+export async function saveSite(_prev: FormState, formData: FormData): Promise<FormState> {
   await requireSession();
-  const id = String(formData.get('assignment_id') ?? '');
-  const siteId = String(formData.get('site_id') ?? '');
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from('site_assignments')
-    .update({ is_active: false, ends_on: toIsoDate(new Date()) })
-    .eq('id', id);
-  if (error) throw new Error(`Unable to end the assignment: ${error.message}`);
-  revalidatePath(`/sites/${siteId}`);
+  const id = text(formData, 'id');
+  const body = {
+    siteCode: text(formData, 'siteCode') ?? '',
+    siteName: text(formData, 'siteName') ?? '',
+    regionId: text(formData, 'regionId'),
+    clusterId: text(formData, 'clusterId', true),
+    countyId: text(formData, 'countyId', true),
+    latitude: num(formData, 'latitude'),
+    longitude: num(formData, 'longitude'),
+    address: text(formData, 'address', true),
+    siteType: text(formData, 'siteType', true),
+    status: text(formData, 'status'),
+    generatorAvailable: formData.get('generatorAvailable') === 'on',
+    solarAvailable: formData.get('solarAvailable') === 'on',
+    gridAvailable: formData.get('gridAvailable') === 'on',
+    batteryConfiguration: text(formData, 'batteryConfiguration', true),
+    powerConfiguration: text(formData, 'powerConfiguration', true),
+    batteryUnitCount: num(formData, 'batteryUnitCount'),
+    geofenceRadiusM: num(formData, 'geofenceRadiusM'),
+  };
+  let savedId: string;
+  try {
+    savedId = (await api<{ id: string }>(id ? `/sites/${id}` : '/sites', { method: id ? 'PATCH' : 'POST', body })).data.id;
+  } catch (e) {
+    return { error: messageOf(e), fieldErrors: e instanceof ApiError ? fieldErrorsOf(e) : undefined, values: formValues(formData) };
+  }
+  redirect(`/sites/${savedId}`);
+}
+
+export async function assignToSite(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requireSession();
+  const siteId = text(formData, 'siteId') ?? '';
+  const role = text(formData, 'role') ?? 'TECHNICIAN';
+  return submit(
+    formData,
+    () => api('/assignments', { body: { siteId, userId: text(formData, 'userId'), role, startDate: text(formData, 'startDate') } }),
+    role === 'SUPERVISOR' ? 'Supervisor appointed.' : 'Technician assigned.',
+    [`/sites/${siteId}`],
+  );
+}
+
+export async function endAssignment(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requireSession();
+  const siteId = text(formData, 'siteId') ?? '';
+  return submit(
+    formData,
+    () => api(`/assignments/${text(formData, 'assignmentId')}/end`, { body: { endDate: text(formData, 'endDate'), reason: text(formData, 'reason') } }),
+    'Assignment ended.',
+    [`/sites/${siteId}`],
+  );
 }

@@ -1,5 +1,5 @@
 import 'server-only';
-import { can, type AppRole, type Capability } from '@ipt/shared';
+import type { AppRole } from '@ipt/shared';
 import { notFound, redirect } from 'next/navigation';
 import { cache } from 'react';
 import { ApiError } from '@/lib/api/client';
@@ -93,18 +93,12 @@ export function hasPermission(session: SessionContext, permission: string): bool
 }
 
 /**
- * Page-level guard for role-specific screens. The API still enforces access;
- * this only avoids rendering screens a role cannot use. Responds 404 so
- * restricted areas are not advertised.
+ * Page-level guard: the user must hold one of these API permissions. The API
+ * still enforces every request; this only avoids rendering screens the user
+ * cannot use. Responds 404 so restricted areas are not advertised.
  */
-export async function requireCapability(capability: Capability): Promise<SessionContext> {
+export async function requirePermission(...permissions: [string, ...string[]]): Promise<SessionContext> {
   const session = await requireSession();
-  if (!can(session.role, capability)) notFound();
-  return session;
-}
-
-export async function requireRole(roles: readonly AppRole[]): Promise<SessionContext> {
-  const session = await requireSession();
-  if (!roles.includes(session.role)) notFound();
+  if (!permissions.some((p) => session.permissions.includes(p))) notFound();
   return session;
 }

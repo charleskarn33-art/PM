@@ -4,8 +4,7 @@ import { buildCsp, createNonce } from '@/lib/csp';
 
 export async function proxy(request: NextRequest) {
   const nonce = createNonce();
-  // Pages not yet moved to the API still load images from the (legacy) Supabase project, when configured.
-  const csp = buildCsp({ nonce, supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL, dev: process.env.NODE_ENV === 'development' });
+  const csp = buildCsp({ nonce, dev: process.env.NODE_ENV === 'development' });
   // Next.js reads the nonce from the request's CSP header and applies it to its scripts.
   const response = await updateApiSession(request, { 'x-nonce': nonce, 'Content-Security-Policy': csp });
   response.headers.set('Content-Security-Policy', csp);
