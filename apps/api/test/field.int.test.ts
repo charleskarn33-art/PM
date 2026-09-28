@@ -23,6 +23,17 @@ let sites: { located: string; unlocated: string };
 const NEAR = { latitude: 7.0005, longitude: -11.0, accuracyM: 8 };
 const FAR = { latitude: 7.01, longitude: -11.0, accuracyM: 12 };
 
+/** Analytics thresholds start empty: no engineering limit is assumed. */
+const NO_THRESHOLDS = {
+  dcLoadKwMax: null,
+  rectifierVoltageMin: null,
+  batteryVoltageMin: null,
+  batteryUnitVoltageMin: null,
+  fuelLevelMinPct: null,
+  generatorServiceHours: null,
+  completionTargetPct: null,
+};
+
 beforeAll(async () => {
   app = await startApp(testConfig({ AUTH_RATE_LIMIT_PER_MINUTE: '1000', RATE_LIMIT_PER_MINUTE: '100000' }), false);
   http = app.getHttpServer();
@@ -56,7 +67,7 @@ const setFence = (mode: string, radiusM = 100) => admin.put('/settings/geofence'
 
 describe('settings', () => {
   it('everyone signed in reads them; only administrators change them, validated', async () => {
-    expect((await tech.get('/settings').expect(200)).body.data).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true } });
+    expect((await tech.get('/settings').expect(200)).body.data).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true }, thresholds: NO_THRESHOLDS });
     await supervisor.put('/settings/geofence', { mode: 'BLOCK', radiusM: 50 }).expect(403);
     await admin.put('/settings/geofence', { mode: 'STRICT', radiusM: 50 }).expect(422);
     await admin.put('/settings/geofence', { mode: 'BLOCK', radiusM: 0 }).expect(422);
@@ -144,7 +155,7 @@ describe('field pack (offline data for the phone)', () => {
     const v = (await tech.post('/visits', { siteId: sites.located, gps: NEAR }).expect(201)).body.data;
     const pack = (await tech.get('/field/pack').expect(200)).body.data;
     expect(pack.userId).toBeTruthy();
-    expect(pack.settings).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true } });
+    expect(pack.settings).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true }, thresholds: NO_THRESHOLDS });
     expect(pack.sites.map((s: { siteCode: string }) => s.siteCode)).toEqual(['G-1', 'G-2']);
     expect(pack.templates.length).toBeGreaterThan(0);
     const template = pack.templates[0];

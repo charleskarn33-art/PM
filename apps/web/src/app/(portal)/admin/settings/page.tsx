@@ -3,13 +3,14 @@ import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { load } from '@/lib/api/data';
 import { requirePermission } from '@/lib/auth';
-import { GeofenceForm, PmRulesForm } from './settings-forms';
+import { GeofenceForm, PmRulesForm, ThresholdsForm } from './settings-forms';
 
 export const metadata: Metadata = { title: 'Settings' };
 
 interface Settings {
   geofence: { mode: 'WARN' | 'REQUIRE_REASON' | 'BLOCK'; radiusM: number };
   pm: { requireSignature: boolean };
+  thresholds: Record<string, number | null>;
 }
 
 export default async function SettingsPage() {
@@ -17,7 +18,7 @@ export default async function SettingsPage() {
   const s = await load<Settings>('/settings');
   return (
     <div className="max-w-3xl space-y-6">
-      <PageHeader title="Settings" description="System rules applied by the API and the mobile app. Analytics thresholds come with Phase 10, notification settings with Phase 12." />
+      <PageHeader title="Settings" description="System rules applied by the API and the mobile app. Notification settings come with Phase 12." />
       <Card>
         <CardHeader>
           <CardTitle>PM start geofence</CardTitle>
@@ -33,6 +34,17 @@ export default async function SettingsPage() {
         </CardHeader>
         <CardContent>
           <PmRulesForm requireSignature={s.pm.requireSignature} />
+        </CardContent>
+      </Card>
+      <Card id="thresholds">
+        <CardHeader>
+          <CardTitle>Analytics thresholds</CardTitle>
+          <CardDescription>
+            No engineering limit is assumed: a threshold left empty flags nothing. Set the limits your organisation uses; Analytics flags each site&apos;s latest reading against them.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ThresholdsForm values={s.thresholds} />
         </CardContent>
       </Card>
     </div>

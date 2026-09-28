@@ -20,6 +20,37 @@ export const SETTINGS = {
     schema: z.strictObject({ requireSignature: z.boolean() }),
     defaults: { requireSignature: true },
   },
+  /**
+   * Analytics thresholds. Every one is empty until an administrator sets it:
+   * no engineering limit is assumed, and nothing is flagged without one.
+   */
+  thresholds: {
+    schema: z.strictObject({
+      /** Flag sites whose DC load is above this (kW). */
+      dcLoadKwMax: z.number().finite().min(0).max(100_000).nullable(),
+      /** Flag rectifier voltage below this (V). */
+      rectifierVoltageMin: z.number().finite().min(0).max(10_000).nullable(),
+      /** Flag battery bank voltage below this (V). */
+      batteryVoltageMin: z.number().finite().min(0).max(10_000).nullable(),
+      /** Flag any single battery below this (V). */
+      batteryUnitVoltageMin: z.number().finite().min(0).max(10_000).nullable(),
+      /** Flag generator fuel level below this (%). */
+      fuelLevelMinPct: z.number().finite().min(0).max(100).nullable(),
+      /** Flag generators at or above this many running hours (service due). */
+      generatorServiceHours: z.number().finite().min(0).max(10_000_000).nullable(),
+      /** PM completion target (%): groups below it are marked. */
+      completionTargetPct: z.number().finite().min(0).max(100).nullable(),
+    }),
+    defaults: {
+      dcLoadKwMax: null,
+      rectifierVoltageMin: null,
+      batteryVoltageMin: null,
+      batteryUnitVoltageMin: null,
+      fuelLevelMinPct: null,
+      generatorServiceHours: null,
+      completionTargetPct: null,
+    },
+  },
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;

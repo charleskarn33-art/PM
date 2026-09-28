@@ -220,6 +220,23 @@ timeline with who and when.
 
 Every figure is counted from the records in the database; nothing is estimated.
 
+## Analytics
+
+All `analytics.read`, scoped to the caller's sites. `from` / `to` are months
+(`YYYY-MM`, organisation time zone); without them the last 6 months up to the
+current one; at most 24 months (otherwise 422). `regionId` and `countyId`
+narrow the sites.
+
+| Method | Path | Result |
+|---|---|---|
+| GET | `/analytics/completion?from&to&by=region\|county\|technician&regionId&countyId` | PM schedules **due** in the months (not cancelled): `due`, `completed` (completed or approved), `onTime` (its finished visit completed on or before the due date), `late`, `overdue` (not completed, past due), `open`, `ratePct`, `onTimePct`, `belowTarget` (null without a configured target) — in `total`, per group (`technician` = the technician the PM was assigned to) and per month due (`trend`) |
+| GET | `/analytics/power?from&to&regionId&countyId&siteId` | `dc`, `battery`, `generator`: readings of **completed or approved** PM visits only — `readings`, `sitesReported`, `sitesFlagged`, `overall` figures, each site's latest reading with `flags`, and a monthly `trend` (averages; null when nothing was recorded) |
+| GET | `/analytics/failures?from&to&regionId&countyId` | `detected` and `closed` in the months with a monthly `trend`, `openNow`, detected `bySeverity` and `byCategory`, the 10 `topSites` and `topItems` (checklist questions), and `timeToClose` (days from detection to closing, mean and median, of failures closed in the months) |
+
+Flags (`DC_LOAD_HIGH`, `RECTIFIER_VOLTAGE_LOW`, `BATTERY_VOLTAGE_LOW`,
+`BATTERY_UNIT_LOW`, `FUEL_LOW`, `SERVICE_HOURS_REACHED`) are raised only
+against configured thresholds; a missing reading is never flagged.
+
 ## Field pack (offline data for the phone)
 
 | Method | Path | Permission |
@@ -234,8 +251,14 @@ changes later through the endpoints above (see the offline notes in
 
 | Method | Path | Permission |
 |---|---|---|
-| GET | `/settings` | signed in — `{ geofence: { mode, radiusM }, pm: { requireSignature } }` |
-| PUT | `/settings/:key` | `settings.manage` — `geofence` or `pm` |
+| GET | `/settings` | signed in — `{ geofence: { mode, radiusM }, pm: { requireSignature }, thresholds: { … } }` |
+| PUT | `/settings/:key` | `settings.manage` — `geofence`, `pm` or `thresholds` |
+
+`thresholds` (all numbers or `null`; every one is `null` until an
+administrator sets it, and a `null` threshold flags nothing):
+`dcLoadKwMax`, `rectifierVoltageMin`, `batteryVoltageMin`,
+`batteryUnitVoltageMin`, `fuelLevelMinPct` (0–100), `generatorServiceHours`,
+`completionTargetPct` (0–100). A PUT sends all seven.
 
 ## Site power history
 

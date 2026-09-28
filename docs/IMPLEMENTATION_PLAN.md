@@ -166,7 +166,7 @@ a written report, and **approval before the next phase**.
   questions keyed (the seed of an already-seeded database is not changed;
   local databases seeded during Phase 4 need their PM data re-seeded).
 - Site power history endpoint per module.
-- Not yet: charts and analytics thresholds (Phase 10).
+- Charts and analytics thresholds came with Phase 10.
 
 **Phase 6 — Mobile.**
 - API: `system_settings` (geofence WARN / REQUIRE_REASON / BLOCK with a
@@ -280,7 +280,7 @@ a written report, and **approval before the next phase**.
   activation, temporary passwords and unlock; organisation; PM templates with
   versions, sections, questions, readings and consistency rules; settings);
   global search in the header.
-- Navigation follows the API permissions. Analytics (Phase 10), Reports
+- Navigation follows the API permissions. Analytics (done in Phase 10), Reports
   (Phase 11), Notifications (Phase 12) and the Audit log (Phase 13) are shown
   as not yet available instead of pages on the old backend.
 - Photos, signatures and attachments reach the browser through the web server
@@ -301,6 +301,37 @@ a written report, and **approval before the next phase**.
   PM, a corrective action from creation to closure with a PDF, and the file
   relay refusing what a user may not see (37 checks, no console or server
   errors).
+
+**Phase 10 — Analytics.**
+- API: `GET /analytics/completion` (PM completion by region, county or
+  technician, with a monthly trend: due, completed, on time, late, overdue,
+  open, rates), `GET /analytics/power` (DC load, batteries, generators: each
+  site's latest reading and monthly averages), `GET /analytics/failures`
+  (detected and closed per month, by severity and PM section, top sites and
+  checklist questions, time to close). Scoped like everything else; months
+  in the organisation's time zone; 6 months by default, 24 at most.
+- Only finished work counts: readings come from completed or approved PM
+  visits (a PM in progress or returned for correction is left out).
+- New setting `thresholds` (DC load maximum, rectifier, battery bank and
+  single-battery voltage minimums, fuel minimum, generator service hours,
+  PM completion target). Every one starts empty; nothing is flagged or
+  marked "below target" until an administrator sets it.
+- Web: Analytics page (PM completion, power systems, failures) with a month
+  range, region and grouping filters; line charts with a legend for two or
+  more series, a crosshair tooltip on hover or arrow keys, the configured
+  target or limit as a dashed line, and a table view; ranked bars; latest
+  reading per site with its flags. Thresholds form in Settings. The dashboard
+  links to Analytics.
+- Figures are computed in the API from the rows in the period (loaded and
+  grouped in memory); fine for the expected size (thousands of sites × 24
+  months), to revisit with SQL aggregation if it grows far beyond that.
+- Verified: unit tests of the rules (month ranges in the time zone, rates,
+  flags only with thresholds), integration tests of the endpoints (counts,
+  scope, target, flags, readings of unfinished PMs excluded, range
+  validation), and a browser run (production build, real API on MySQL; 25
+  checks: figures, hover tooltip, table view, grouping, thresholds saved and
+  cleared, flags, supervisor scope, technician refused, no horizontal scroll
+  on a phone).
 
 ## 6. Open decisions (do not block Phase 1)
 

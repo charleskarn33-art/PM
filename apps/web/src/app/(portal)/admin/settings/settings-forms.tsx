@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { FormState } from '@/lib/form-action';
-import { saveGeofence, savePmRules } from './actions';
+import { saveGeofence, savePmRules, saveThresholds } from './actions';
 
 const MODES = [
   ['WARN', 'Warn', 'The PM starts anywhere; the position and distance are recorded and shown to the supervisor.'],
@@ -58,6 +58,40 @@ export function PmRulesForm({ requireSignature }: { requireSignature: boolean })
       </label>
       <Button type="submit" disabled={pending}>
         Save PM rules
+      </Button>
+    </form>
+  );
+}
+
+const THRESHOLDS = [
+  ['completionTargetPct', 'PM completion target', '%', 'Groups below it are marked in Analytics.', 100],
+  ['dcLoadKwMax', 'Maximum DC load', 'kW', 'Sites whose DC load is above it are flagged.', 100000],
+  ['rectifierVoltageMin', 'Minimum rectifier voltage', 'V', 'Rectifier voltage below it is flagged.', 10000],
+  ['batteryVoltageMin', 'Minimum battery bank voltage', 'V', 'Bank voltage below it is flagged.', 10000],
+  ['batteryUnitVoltageMin', 'Minimum single battery voltage', 'V', 'Any battery below it is flagged.', 10000],
+  ['fuelLevelMinPct', 'Minimum generator fuel level', '%', 'Fuel below it is flagged.', 100],
+  ['generatorServiceHours', 'Generator service hours', 'h', 'Running hours at or above it are flagged as service due.', 10000000],
+] as const;
+
+export function ThresholdsForm({ values }: { values: Record<string, number | null> }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(saveThresholds, {});
+  return (
+    <form action={action} className="space-y-4">
+      <FormMessages state={state} />
+      <div className="grid gap-4 sm:grid-cols-2">
+        {THRESHOLDS.map(([key, label, unit, help, max]) => (
+          <div key={key} className="space-y-1.5">
+            <Label htmlFor={key}>
+              {label} ({unit})
+            </Label>
+            <Input id={key} name={key} type="number" inputMode="decimal" step="any" min={0} max={max} placeholder="Not set" defaultValue={state.values?.[key] ?? values[key] ?? ''} />
+            <p className="text-xs text-muted-foreground">{help}</p>
+            <FieldError message={state.fieldErrors?.[key]} />
+          </div>
+        ))}
+      </div>
+      <Button type="submit" disabled={pending}>
+        Save thresholds
       </Button>
     </form>
   );

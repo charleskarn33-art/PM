@@ -157,7 +157,13 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-      <p className="text-xs text-muted-foreground">Trend charts (completion by region, county and technician, DC load, battery and generator) arrive with Analytics in Phase 10.</p>
+      <p className="text-sm text-muted-foreground">
+        Trends over time — completion by region, county and technician, DC load, batteries, generators and failures — are in{' '}
+        <Link href="/analytics" className="underline">
+          Analytics
+        </Link>
+        .
+      </p>
     </div>
   );
 }

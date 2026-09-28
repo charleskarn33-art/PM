@@ -4,6 +4,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import type { Request } from 'express';
 import type { IncomingMessage } from 'node:http';
+import { AnalyticsModule } from './analytics/analytics.module.js';
 import { AssignmentsModule } from './assignments/assignments.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
@@ -71,6 +72,7 @@ export class AppModule {
         PmModule,
         FailuresModule,
         InsightsModule,
+        AnalyticsModule,
         ...extra,
       ],
       providers: [
