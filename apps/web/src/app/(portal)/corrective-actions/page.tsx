@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Pagination } from '@/components/data-table/pagination';
 import { EmptyRow } from '@/components/empty-row';
+import { ExportLink } from '@/components/export-link';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -34,7 +35,15 @@ export default async function ActionsPage({ searchParams }: { searchParams: Prom
   const today = new Date().toISOString().slice(0, 10);
   return (
     <div className="space-y-6">
-      <PageHeader title="Corrective Actions" description="Work to resolve failures: assigned → in progress → completed → verified → closed. New actions are created from a failure." />
+      <PageHeader
+        title="Corrective Actions"
+        description="Work to resolve failures: assigned → in progress → completed → verified → closed. New actions are created from a failure."
+        actions={
+          hasPermission(session, 'reports.export') ? (
+            <ExportLink dataset="corrective-actions" query={qs({ status, assignedTo: mine ? 'me' : undefined, overdue: f.overdue === 'true' ? 'true' : undefined, siteId: f.site })} />
+          ) : null
+        }
+      />
       <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-4">
         <Select name="status" defaultValue={status ?? ''} aria-label="Status">
           <option value="active">Open (not verified)</option>

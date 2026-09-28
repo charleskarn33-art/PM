@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Pagination } from '@/components/data-table/pagination';
 import { EmptyRow } from '@/components/empty-row';
+import { ExportLink } from '@/components/export-link';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -37,7 +38,15 @@ export default async function VisitsPage({ searchParams }: { searchParams: Promi
   ]);
   return (
     <div className="space-y-6">
-      <PageHeader title="PM Visits & Review" description="PM visits in your scope, latest first. Completed visits wait for a supervisor to approve them or return them for correction." />
+      <PageHeader
+        title="PM Visits & Review"
+        description="PM visits in your scope, latest first. Completed visits wait for a supervisor to approve them or return them for correction."
+        actions={
+          hasPermission(session, 'reports.export') ? (
+            <ExportLink dataset="visits" query={qs({ status: f.status, technicianId: f.technician, siteId: f.site, from: f.from, to: f.to })} />
+          ) : null
+        }
+      />
       <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-5 md:items-end">
         <div className="space-y-1.5">
           <Label htmlFor="status">Status</Label>

@@ -237,6 +237,31 @@ Flags (`DC_LOAD_HIGH`, `RECTIFIER_VOLTAGE_LOW`, `BATTERY_VOLTAGE_LOW`,
 `BATTERY_UNIT_LOW`, `FUEL_LOW`, `SERVICE_HOURS_REACHED`) are raised only
 against configured thresholds; a missing reading is never flagged.
 
+## Reports
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/visits/:id/report.pdf` | `pm_visits.read` (scoped) — the PM visit report (A4 PDF, `inline`): site and visit, GPS result, each section's readings, calculated figures (DC power, total phase current, battery units), checklist answers with failures marked, photos (JPEG / PNG / WebP, reduced for print), failures raised, comments, review and the technician's signature; "DEMO DATA" on demo records |
+| GET | `/sites/:id/pm-history?from&to&page&pageSize` | `pm_visits.read` (scoped) — the site's PM visits, newest first: status, due date and on time, checklist completion, failures, reviewer, key readings (DC load, rectifier, battery bank and lowest battery, fuel, running hours); `meta` has the site and a count per status |
+| GET | `/exports/<dataset>.csv?filters` | `reports.export` (scoped) — see below |
+
+Exports are CSV (UTF-8 with a byte-order mark, RFC 4180 quoting, text that
+starts with `=`, `+`, `-` or `@` prefixed with `'` so spreadsheets never run
+it), streamed in batches with no row limit, as `attachment`. Dates and times
+are in the organisation's time zone. `from` / `to` are `YYYY-MM-DD`.
+
+| Dataset | Filters (as the matching list) | Date filter on |
+|---|---|---|
+| `visits` (with key readings; also the PM history of a site) | `status`, `siteId`, `technicianId`, `regionId`, `from`, `to` | start |
+| `schedules` | `status`, `siteId`, `technicianId`, `regionId`, `from`, `to` | scheduled date |
+| `failures` | `status` (or `active`), `severity`, `category`, `source`, `siteId`, `visitId`, `regionId`, `q`, `from`, `to` | detection |
+| `corrective-actions` | `status` (or `active`), `assignedToId`, `assignedTo=me`, `overdue=true`, `siteId`, `regionId`, `from`, `to` | creation |
+| `sites` | the site list's filters (`q`, `regionId`, `clusterId`, `countyId`, `status`, `supervisorId`, `technicianId`, `pm`) | — |
+| `readings` | `module=dc\|battery\|generator` (required), `siteId`, `regionId`, `from`, `to`; completed or approved PMs only | recording |
+
+The visit list (`GET /visits`) also accepts `status=finished` (completed or
+approved).
+
 ## Field pack (offline data for the phone)
 
 | Method | Path | Permission |

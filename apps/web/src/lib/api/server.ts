@@ -39,7 +39,8 @@ export async function clearSession(): Promise<void> {
 }
 
 /** Fetches a file from the API as the signed-in user (photos, signatures, attachments); the raw response. */
-export async function apiRaw(path: string): Promise<Response> {
+/** `timeoutMs` covers the whole transfer (long exports need more than the default). */
+export async function apiRaw(path: string, timeoutMs = 30_000): Promise<Response> {
   const [{ accessToken }, client] = await Promise.all([readTokens(), requestClient()]);
   const env = apiEnv();
   const headers: Record<string, string> = {};
@@ -48,7 +49,7 @@ export async function apiRaw(path: string): Promise<Response> {
     headers['X-IPT-Forward-Key'] = env.forwardSecret;
     headers['X-IPT-Client-IP'] = client.clientIp;
   }
-  return fetch(`${env.apiUrl}/api/v1${path}`, { headers, cache: 'no-store', signal: AbortSignal.timeout(30_000) });
+  return fetch(`${env.apiUrl}/api/v1${path}`, { headers, cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
 }
 
 /** Sends a multipart upload to the API as the signed-in user. */

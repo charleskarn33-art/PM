@@ -184,8 +184,11 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
         ) : null}
         {visits ? (
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-2">
               <CardTitle className="text-base">PM visits</CardTitle>
+              <Link href={`/sites/${site.id}/history`} className="text-sm text-muted-foreground hover:text-foreground hover:underline">
+                Full PM history{visits.total > visits.items.length ? ` (${visits.total})` : ''}
+              </Link>
             </CardHeader>
             <CardContent>
               {visits.items.length ? (

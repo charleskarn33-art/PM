@@ -8,12 +8,13 @@ const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const ALLOWED = [
   new RegExp(`^visits/${UUID}/photos/${UUID}$`),
   new RegExp(`^visits/${UUID}/signature$`),
+  new RegExp(`^visits/${UUID}/report\\.pdf$`),
   new RegExp(`^failures/${UUID}/attachments/${UUID}$`),
 ];
 const PASS_HEADERS = ['content-type', 'content-length', 'content-disposition', 'cache-control'];
 
 /**
- * Relays photos, signatures and attachments from the API with the user's
+ * Relays photos, signatures, attachments and PM reports (PDF) from the API with the user's
  * session (the browser never holds the API token). The API checks access to
  * each file; this only forwards allowed paths.
  */
@@ -34,7 +35,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ pat
     if (v) headers.set(h, v);
   }
   headers.set('X-Content-Type-Options', 'nosniff');
-  // An SVG signature is shown as an image only; it never runs anything.
-  headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+  // An SVG signature is shown as an image only; it never runs anything. PDFs are
+  // our own reports, opened in the browser's viewer (which a sandbox would block).
+  if (!path.endsWith('.pdf')) headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
   return new NextResponse(res.body, { status: 200, headers });
 }

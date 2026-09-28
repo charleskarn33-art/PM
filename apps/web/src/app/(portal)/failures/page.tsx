@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Pagination } from '@/components/data-table/pagination';
 import { EmptyRow } from '@/components/empty-row';
+import { ExportLink } from '@/components/export-link';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -36,12 +37,17 @@ export default async function FailuresPage({ searchParams }: { searchParams: Pro
         title="Failures"
         description="Failures recorded from completed PMs or reported on site, in your scope. Open failures are shown first by default."
         actions={
-          hasPermission(session, 'failures.report') ? (
-            <Link href="/failures/new" className={buttonVariants({ variant: 'accent' })}>
-              <Plus aria-hidden />
-              Report failure
-            </Link>
-          ) : null
+          <>
+            {hasPermission(session, 'reports.export') ? (
+              <ExportLink dataset="failures" query={qs({ status, severity: f.severity, source: f.source, siteId: f.site, visitId: f.visit, q: p.q, from: f.from, to: f.to })} />
+            ) : null}
+            {hasPermission(session, 'failures.report') ? (
+              <Link href="/failures/new" className={buttonVariants({ variant: 'accent' })}>
+                <Plus aria-hidden />
+                Report failure
+              </Link>
+            ) : null}
+          </>
         }
       />
       <form method="get" role="search" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-6">

@@ -122,21 +122,7 @@ export class OrganisationService {
   /** Paginated site list with filters (no unbounded reads), limited to the caller's scope. */
   async listSites(query: unknown, caller?: AuthUser) {
     const q = parseInput(SiteListQuery, query);
-    const where: Prisma.SiteWhereInput = {
-      AND: [
-        (caller && siteScope(caller)) ?? {},
-        q.regionId ? { regionId: q.regionId } : {},
-        q.clusterId ? { clusterId: q.clusterId } : {},
-        q.countyId ? { countyId: q.countyId } : {},
-        q.status ? { status: q.status } : {},
-        q.q ? { OR: [{ siteCode: { contains: q.q } }, { siteName: { contains: q.q } }, { county: { name: { contains: q.q } } }] } : {},
-        q.supervisorId ? { assignments: { some: { userId: q.supervisorId, role: 'SUPERVISOR', active: true } } } : {},
-        q.technicianId ? { assignments: { some: { userId: q.technicianId, role: 'TECHNICIAN', active: true } } } : {},
-        q.pm === 'overdue' ? { pmSchedules: { some: { status: 'OVERDUE' } } } : {},
-        q.pm === 'scheduled' ? { pmSchedules: { some: { status: { in: [...OPEN_SCHEDULE] } }, none: { status: 'OVERDUE' } } } : {},
-        q.pm === 'none' ? { pmSchedules: { none: { status: { in: [...OPEN_SCHEDULE] } } } } : {},
-      ],
-    };
+    const where = siteListWhere(q, caller);
     const order: Prisma.SiteOrderByWithRelationInput =
       q.sort === 'region' ? { region: { name: q.dir } } : q.sort === 'siteName' ? { siteName: q.dir } : q.sort === 'status' ? { status: q.dir } : { siteCode: q.dir };
     const [items, total] = await this.prisma.$transaction([
@@ -215,4 +201,23 @@ export class OrganisationService {
     if (!s) throw notFound('Site');
     return s;
   }
+}
+
+/** The site list's filters (also used by the sites CSV export), within the caller's scope. */
+export function siteListWhere(q: SiteListQuery, caller?: AuthUser): Prisma.SiteWhereInput {
+  return {
+    AND: [
+      (caller && siteScope(caller)) ?? {},
+      q.regionId ? { regionId: q.regionId } : {},
+      q.clusterId ? { clusterId: q.clusterId } : {},
+      q.countyId ? { countyId: q.countyId } : {},
+      q.status ? { status: q.status } : {},
+      q.q ? { OR: [{ siteCode: { contains: q.q } }, { siteName: { contains: q.q } }, { county: { name: { contains: q.q } } }] } : {},
+      q.supervisorId ? { assignments: { some: { userId: q.supervisorId, role: 'SUPERVISOR', active: true } } } : {},
+      q.technicianId ? { assignments: { some: { userId: q.technicianId, role: 'TECHNICIAN', active: true } } } : {},
+      q.pm === 'overdue' ? { pmSchedules: { some: { status: 'OVERDUE' } } } : {},
+      q.pm === 'scheduled' ? { pmSchedules: { some: { status: { in: [...OPEN_SCHEDULE] } }, none: { status: 'OVERDUE' } } } : {},
+      q.pm === 'none' ? { pmSchedules: { none: { status: { in: [...OPEN_SCHEDULE] } } } } : {},
+    ],
+  };
 }

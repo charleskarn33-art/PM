@@ -81,7 +81,8 @@ const statuses = ['IN_PROGRESS', 'COMPLETED', 'APPROVED', 'REJECTED', 'CANCELLED
 export const VisitListQuery = z.strictObject({
   siteId: z.uuid().optional(),
   technicianId: z.uuid().optional(),
-  status: z.enum(statuses).optional(),
+  /** A status, or `finished`: completed or approved. */
+  status: z.enum([...statuses, 'finished']).optional(),
   mine: z.enum(['true', 'false']).transform((v) => v === 'true').optional(),
   from: z.iso.date().optional(),
   to: z.iso.date().optional(),

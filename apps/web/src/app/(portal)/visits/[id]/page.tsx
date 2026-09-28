@@ -1,10 +1,12 @@
 import { PM_STATUS_TONE } from '@ipt/shared';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { FileText } from 'lucide-react';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { load } from '@/lib/api/data';
 import type { PmStatus } from '@/lib/api/types';
@@ -114,7 +116,15 @@ export default async function VisitPage({ params, searchParams }: { params: Prom
       <PageHeader
         title={`PM — ${v.site.siteCode} · ${v.site.siteName}`}
         description={`${v.template.name} v${v.template.version} · ${v.technician.fullName}`}
-        actions={<StatusBadge status={v.status === 'COMPLETED' ? 'WAITING_FOR_REVIEW' : v.status} tone={PM_STATUS_TONE[v.status]} />}
+        actions={
+          <>
+            <StatusBadge status={v.status === 'COMPLETED' ? 'WAITING_FOR_REVIEW' : v.status} tone={PM_STATUS_TONE[v.status]} />
+            <a href={`/files/visits/${v.id}/report.pdf`} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline' })}>
+              <FileText aria-hidden />
+              PM report (PDF)
+            </a>
+          </>
+        }
       />
       {done && DONE[done] ? <Alert tone="success">{DONE[done]}</Alert> : null}
       {v.isDemo ? <Alert tone="info">Demo data seeded from the Tienii 1301 reference report — not a live PM.</Alert> : null}

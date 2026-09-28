@@ -6,6 +6,7 @@ import { ColumnToggle } from '@/components/data-table/column-toggle';
 import { Pagination } from '@/components/data-table/pagination';
 import { SortHeader } from '@/components/data-table/sort-header';
 import { EmptyRow } from '@/components/empty-row';
+import { ExportLink } from '@/components/export-link';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Badge } from '@/components/ui/badge';
@@ -62,12 +63,17 @@ export default async function SitesPage({ searchParams }: { searchParams: Promis
         title="Sites"
         description="Telecom power sites in your scope."
         actions={
-          hasPermission(session, 'sites.manage') && session.isGlobal ? (
-            <Link href="/sites/new" className={buttonVariants({ variant: 'accent' })}>
-              <Plus aria-hidden />
-              New site
-            </Link>
-          ) : null
+          <>
+            {hasPermission(session, 'reports.export') ? (
+              <ExportLink dataset="sites" query={qs({ q: params.q, regionId: f.region, clusterId: f.cluster, countyId: f.county, supervisorId: f.supervisor, pm: f.pm, status: f.status })} />
+            ) : null}
+            {hasPermission(session, 'sites.manage') && session.isGlobal ? (
+              <Link href="/sites/new" className={buttonVariants({ variant: 'accent' })}>
+                <Plus aria-hidden />
+                New site
+              </Link>
+            ) : null}
+          </>
         }
       />
 

@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Pagination } from '@/components/data-table/pagination';
 import { EmptyRow } from '@/components/empty-row';
+import { ExportLink } from '@/components/export-link';
 import { PageHeader } from '@/components/page-header';
 import { StatusBadge } from '@/components/status-badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -39,12 +40,15 @@ export default async function SchedulePage({ searchParams }: { searchParams: Pro
         title="PM Schedule"
         description="Planned preventive maintenance in your scope, earliest due first. Overdue PMs are marked every hour."
         actions={
-          hasPermission(session, 'pm_schedules.manage') ? (
-            <Link href="/schedule/new" className={buttonVariants({ variant: 'accent' })}>
-              <Plus aria-hidden />
-              Schedule PM
-            </Link>
-          ) : null
+          <>
+            {hasPermission(session, 'reports.export') ? <ExportLink dataset="schedules" query={qs({ status: f.status, technicianId: f.technician, siteId: f.site, from: f.from, to: f.to })} /> : null}
+            {hasPermission(session, 'pm_schedules.manage') ? (
+              <Link href="/schedule/new" className={buttonVariants({ variant: 'accent' })}>
+                <Plus aria-hidden />
+                Schedule PM
+              </Link>
+            ) : null}
+          </>
         }
       />
       <form method="get" className="grid gap-3 rounded-xl border bg-card p-4 md:grid-cols-5 md:items-end">

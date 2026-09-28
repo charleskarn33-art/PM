@@ -32,6 +32,8 @@ export const envSchema = z
     // Shared secret the web app's server sends with the browser's IP address, so rate limits and
     // session records use the real client IP rather than the web server's. Optional.
     WEB_FORWARD_SECRET: z.preprocess((v) => (v === '' ? undefined : v), secret('WEB_FORWARD_SECRET').optional()),
+    // The organisation's name, printed on reports.
+    ORG_NAME: z.string().trim().min(1).max(120).default('IPT PowerTech'),
     // The organisation's time zone: decides "today" for due dates and overdue PMs.
     ORG_TIMEZONE: z
       .string()
@@ -82,6 +84,7 @@ export class AppConfig {
   readonly jwt!: { accessSecret: string; refreshSecret: string; accessTtlSeconds: number; refreshTtlSeconds: number };
   readonly auth!: { maxFailedLogins: number; lockoutMinutes: number; rateLimitPerMinute: number; refreshReuseGraceSeconds: number };
   readonly webForwardSecret!: string | null;
+  readonly orgName!: string;
   readonly orgTimezone!: string;
   readonly photoMaxBytes!: number;
   /** Largest document (PDF) attached to a failure or corrective action. */
@@ -124,6 +127,7 @@ export function loadConfig(source: Record<string, string | undefined>): AppConfi
       refreshReuseGraceSeconds: e.AUTH_REFRESH_REUSE_GRACE_SECONDS,
     },
     webForwardSecret: e.WEB_FORWARD_SECRET ?? null,
+    orgName: e.ORG_NAME,
     orgTimezone: e.ORG_TIMEZONE,
     photoMaxBytes: e.PHOTO_MAX_BYTES,
     documentMaxBytes: e.DOCUMENT_MAX_BYTES,

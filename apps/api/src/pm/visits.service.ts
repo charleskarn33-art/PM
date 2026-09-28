@@ -370,7 +370,7 @@ export class VisitsService {
         q.siteId ? { siteId: q.siteId } : {},
         q.technicianId ? { technicianId: q.technicianId } : {},
         q.mine ? { technicianId: caller.id } : {},
-        q.status ? { status: q.status } : {},
+        q.status === 'finished' ? { status: { in: ['COMPLETED', 'APPROVED'] } } : q.status ? { status: q.status } : {},
         q.from ? { startedAt: { gte: toDate(q.from) } } : {},
         q.to ? { startedAt: { lt: new Date(toDate(q.to).getTime() + 86_400_000) } } : {},
       ],

@@ -52,7 +52,7 @@ export const NAVIGATION: NavSection[] = [
     title: 'Insights',
     items: [
       { label: 'Analytics', href: '/analytics', icon: 'analytics', permissions: ['analytics.read'] },
-      { label: 'Reports', href: '/reports', icon: 'reports', permissions: ['reports.read'], plannedPhase: 11 },
+      { label: 'Reports', href: '/reports', icon: 'reports', permissions: ['reports.read'] },
     ],
   },
   {
