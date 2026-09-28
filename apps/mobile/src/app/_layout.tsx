@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ScrollView, StyleSheet, Text } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { PushHandler } from '@/components/push-handler';
 import { LoadingView } from '@/components/ui';
 import { mobileEnv } from '@/lib/env';
 import { OfflineProvider } from '@/offline/offline-provider';
@@ -19,7 +20,9 @@ function RootNavigator() {
   const fieldUser = signedIn && !mustChangePassword && Boolean(profile?.is_active) && isMobileRole(profile?.role);
 
   return (
-    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
+    <>
+      {fieldUser ? <PushHandler pmWork={profile?.role !== 'maintenance'} /> : null}
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
       <Stack.Protected guard={fieldUser}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="pm/[visitId]" options={{ headerShown: false }} />
@@ -43,6 +46,15 @@ function RootNavigator() {
           }}
         />
         <Stack.Screen
+          name="notifications"
+          options={{
+            headerShown: true,
+            headerStyle: { backgroundColor: colors.navy },
+            headerTintColor: colors.white,
+            title: 'Notifications',
+          }}
+        />
+        <Stack.Screen
           name="site/[id]"
           options={{
             headerShown: true,
@@ -61,7 +73,8 @@ function RootNavigator() {
       <Stack.Protected guard={!signedIn}>
         <Stack.Screen name="login" />
       </Stack.Protected>
-    </Stack>
+      </Stack>
+    </>
   );
 }
 

@@ -7,7 +7,8 @@ const HOURLY = 60 * 60 * 1000;
 /**
  * Marks PMs overdue (scheduled, due date passed in the organisation's time
  * zone) at start-up and every hour. The update is idempotent, so running it
- * on several API instances is harmless. Moves to the worker in Phase 12.
+ * on several API instances is harmless. Each PM that becomes overdue notifies
+ * its technician and the site's supervisors once.
  */
 @Injectable()
 export class OverdueJob implements OnApplicationBootstrap, OnApplicationShutdown {

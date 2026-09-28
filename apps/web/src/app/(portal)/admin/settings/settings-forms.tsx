@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { FormState } from '@/lib/form-action';
-import { saveGeofence, savePmRules, saveThresholds } from './actions';
+import { saveGeofence, saveNotificationSettings, savePmRules, saveThresholds } from './actions';
 
 const MODES = [
   ['WARN', 'Warn', 'The PM starts anywhere; the position and distance are recorded and shown to the supervisor.'],
@@ -92,6 +92,40 @@ export function ThresholdsForm({ values }: { values: Record<string, number | nul
       </div>
       <Button type="submit" disabled={pending}>
         Save thresholds
+      </Button>
+    </form>
+  );
+}
+
+export function NotificationSettingsForm({ pmDueReminderDays, actionOverdueAlerts }: { pmDueReminderDays: number | null; actionOverdueAlerts: boolean }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(saveNotificationSettings, {});
+  return (
+    <form action={action} className="space-y-4">
+      <FormMessages state={state} />
+      <div className="max-w-xs space-y-1.5">
+        <Label htmlFor="pmDueReminderDays">Remind technicians before a PM is due (days)</Label>
+        <Input
+          id="pmDueReminderDays"
+          name="pmDueReminderDays"
+          type="number"
+          min={1}
+          max={60}
+          step={1}
+          placeholder="No reminder"
+          defaultValue={state.values?.pmDueReminderDays ?? pmDueReminderDays ?? ''}
+        />
+        <p className="text-xs text-muted-foreground">Empty: no reminder. One reminder per PM, sent when it comes within this many days of its due date.</p>
+        <FieldError message={state.fieldErrors?.pmDueReminderDays} />
+      </div>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" name="actionOverdueAlerts" defaultChecked={actionOverdueAlerts} className="mt-0.5 size-4" />
+        <span>
+          <span className="font-medium">Alert when a corrective action is overdue</span>
+          <span className="block text-muted-foreground">The assignee and the site&apos;s supervisors are told once when an assigned action passes its due date.</span>
+        </span>
+      </label>
+      <Button type="submit" disabled={pending}>
+        Save notification settings
       </Button>
     </form>
   );

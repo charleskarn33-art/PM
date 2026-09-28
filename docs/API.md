@@ -262,6 +262,44 @@ are in the organisation's time zone. `from` / `to` are `YYYY-MM-DD`.
 The visit list (`GET /visits`) also accepts `status=finished` (completed or
 approved).
 
+## Notifications
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/notifications?unread=true&page&pageSize` | signed in — the caller's own, newest first: `{ id, type, title, body, entityType, entityId, readAt, createdAt }`; `meta.unread` |
+| GET | `/notifications/unread-count` | signed in — `{ unread }` |
+| POST | `/notifications/:id/read` | signed in (own only; others' are 404) — `{ unread }` |
+| POST | `/notifications/read-all` | signed in — `{ marked, unread: 0 }` |
+| POST | `/push-tokens` | signed in — `{ token (Expo push token), platform: android\|ios, deviceName? }`; a token already registered to someone else moves to the caller; `{ registered, pushEnabled }` |
+| DELETE | `/push-tokens` | signed in — `{ token }`, the caller's own only (sign-out) |
+
+When they are sent (never to the person who caused the event, never to
+inactive users, at most once per event and person):
+
+| Type | Recipients | When |
+|---|---|---|
+| `PM_SCHEDULED` | the technician | a PM (or a recurring series: one notification) is scheduled for them, or reassigned to them |
+| `SITE_ASSIGNED` | the person assigned | assigned to a site as technician or supervisor |
+| `PM_SUBMITTED` | the site's supervisors¹ | a technician completes a PM (each time, also after a correction) |
+| `PM_APPROVED` / `PM_RETURNED` | the technician | a supervisor approves the PM / returns it (with the comments) |
+| `PM_OVERDUE` | the technician and the site's supervisors | the hourly job marks a PM overdue |
+| `FAILURE_CRITICAL` | the site's supervisors and the region's managers | a critical failure is recorded (checklist, reported on site, or raised to critical) |
+| `ACTION_ASSIGNED` | the assignee | a corrective action is assigned (at creation or later) |
+| `ACTION_COMPLETED` | whoever assigned it and the site's supervisors | the assignee completes it (to verify) |
+| `ACTION_RETURNED` | the assignee | the supervisor sends the work back |
+| `PM_DUE_SOON` | the technician | only when `settings.notifications.pmDueReminderDays` is set: once per PM coming within that many days of its due date |
+| `ACTION_OVERDUE` | the assignee and the site's supervisors | only when `settings.notifications.actionOverdueAlerts` is on: once when an assigned action passes its due date |
+
+¹ Supervisors assigned to the site and regional supervisors whose scope
+includes its region.
+
+**Push:** with `PUSH_ENABLED=true` each notification is also sent to the
+recipient's registered phones through Expo's push service (by the API's
+push sender every 15 seconds; batches of 100; retried up to 3 times when the
+service cannot be reached; not sent when older than 24 hours; phones Expo
+reports as no longer registered are removed). With push disabled (the
+default) nothing is sent to Expo and notifications are in-app only.
+
 ## Field pack (offline data for the phone)
 
 | Method | Path | Permission |
@@ -276,8 +314,8 @@ changes later through the endpoints above (see the offline notes in
 
 | Method | Path | Permission |
 |---|---|---|
-| GET | `/settings` | signed in — `{ geofence: { mode, radiusM }, pm: { requireSignature }, thresholds: { … } }` |
-| PUT | `/settings/:key` | `settings.manage` — `geofence`, `pm` or `thresholds` |
+| GET | `/settings` | signed in — `{ geofence: { mode, radiusM }, pm: { requireSignature }, thresholds: { … }, notifications: { pmDueReminderDays, actionOverdueAlerts } }` |
+| PUT | `/settings/:key` | `settings.manage` — `geofence`, `pm`, `thresholds` or `notifications` |
 
 `thresholds` (all numbers or `null`; every one is `null` until an
 administrator sets it, and a `null` threshold flags nothing):

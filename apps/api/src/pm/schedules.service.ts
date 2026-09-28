@@ -8,6 +8,7 @@ import { invalid, notFound, rethrowDbError } from '../common/prisma-errors.js';
 import { parseInput } from '../common/validation.js';
 import { AppConfig } from '../config/app-config.js';
 import type { PmStatus, Prisma } from '../generated/prisma/client.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { daysBetween, MAX_OCCURRENCES, occurrenceDates, toDate, todayIn, toIso } from './dates.js';
 
@@ -80,6 +81,7 @@ export class SchedulesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: AppConfig,
+    private readonly notifications: NotificationsService,
   ) {}
 
   today(): string {
@@ -119,6 +121,19 @@ export class SchedulesService {
             },
           });
           ids.push(row.id);
+        }
+        if (data.technicianId) {
+          const info = await tx.site.findUniqueOrThrow({ where: { id: site.id }, select: { siteCode: true, siteName: true } });
+          const first = dates[0]!;
+          await this.notifications.notify(tx, {
+            userIds: [data.technicianId],
+            actorId: caller.id,
+            type: 'PM_SCHEDULED',
+            title: ids.length > 1 ? `${ids.length} PMs scheduled at ${info.siteCode}` : `PM scheduled at ${info.siteCode}`,
+            body: `${info.siteName} — ${ids.length > 1 ? `from ${first}` : `scheduled ${first}, due ${toIso(new Date(toDate(first).getTime() + gap * 86_400_000))}`}.`,
+            entity: { type: 'schedule', id: ids[0]! },
+            key: `pm-scheduled:${seriesId ?? ids[0]}`,
+          });
         }
         return tx.pmSchedule.findMany({ where: { id: { in: ids } }, include: INCLUDE, orderBy: { scheduledDate: 'asc' } });
       })
@@ -170,6 +185,18 @@ export class SchedulesService {
         const scheduled = data.scheduledDate ?? toIso(s.scheduledDate);
         const due = data.dueDate ?? toIso(s.dueDate);
         if (due < scheduled) throw invalid('VALIDATION_FAILED', 'The request contains invalid values.', [{ path: 'dueDate', message: 'must not be before the scheduled date' }]);
+        if (data.technicianId && data.technicianId !== s.technicianId) {
+          const info = await tx.site.findUniqueOrThrow({ where: { id: s.siteId }, select: { siteCode: true, siteName: true } });
+          await this.notifications.notify(tx, {
+            userIds: [data.technicianId],
+            actorId: caller.id,
+            type: 'PM_SCHEDULED',
+            title: `PM assigned to you at ${info.siteCode}`,
+            body: `${info.siteName} — scheduled ${scheduled}, due ${due}.`,
+            entity: { type: 'schedule', id },
+            key: `pm-scheduled:${id}:${data.technicianId}`,
+          });
+        }
         return tx.pmSchedule.update({
           where: { id },
           data: {
@@ -199,7 +226,24 @@ export class SchedulesService {
 
   /** SCHEDULED past its due date → OVERDUE. Returns the number of schedules changed. */
   async markOverdue(today = this.today()): Promise<number> {
-    const { count } = await this.prisma.pmSchedule.updateMany({ where: { status: 'SCHEDULED', dueDate: { lt: toDate(today) } }, data: { status: 'OVERDUE' } });
+    const late = await this.prisma.pmSchedule.findMany({
+      where: { status: 'SCHEDULED', dueDate: { lt: toDate(today) } },
+      select: { id: true, siteId: true, technicianId: true, dueDate: true, site: { select: { siteCode: true, siteName: true } } },
+    });
+    if (!late.length) return 0;
+    // Only rows still SCHEDULED change (another instance may have got there first).
+    const { count } = await this.prisma.pmSchedule.updateMany({ where: { id: { in: late.map((l) => l.id) }, status: 'SCHEDULED' }, data: { status: 'OVERDUE' } });
+    for (const l of late) {
+      await this.notifications.notify(this.prisma, {
+        userIds: [l.technicianId, ...(await this.notifications.siteSupervisors(this.prisma, l.siteId))],
+        actorId: null,
+        type: 'PM_OVERDUE',
+        title: `PM overdue at ${l.site.siteCode}`,
+        body: `${l.site.siteName} — was due ${toIso(l.dueDate)}.`,
+        entity: { type: 'schedule', id: l.id },
+        key: `pm-overdue:${l.id}:${toIso(l.dueDate)}`,
+      });
+    }
     return count;
   }
 

@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { breadcrumbsFor, type NavSection } from '@/lib/navigation';
 import { AppSidebar } from './app-sidebar';
+import { NotificationBell } from './notification-bell';
 
 interface PortalShellProps {
   sections: NavSection[];
@@ -72,6 +73,7 @@ export function PortalShell({ sections, userName, roleLabel, children }: PortalS
           <Link href="/search" className="inline-flex size-10 items-center justify-center rounded-md hover:bg-muted md:hidden" aria-label="Search">
             <Search className="size-5" aria-hidden />
           </Link>
+          <NotificationBell />
           <div className="hidden text-right sm:block">
             <p className="text-sm font-medium leading-tight">{userName}</p>
             <Badge tone="outline" className="mt-0.5">

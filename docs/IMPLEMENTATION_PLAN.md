@@ -281,7 +281,7 @@ a written report, and **approval before the next phase**.
   versions, sections, questions, readings and consistency rules; settings);
   global search in the header.
 - Navigation follows the API permissions. Analytics (done in Phase 10), Reports
-  (done in Phase 11), Notifications (Phase 12) and the Audit log (Phase 13) are shown
+  (done in Phase 11), Notifications (done in Phase 12) and the Audit log (Phase 13) are shown
   as not yet available instead of pages on the old backend.
 - Photos, signatures and attachments reach the browser through the web server
   (`/files/…`, allow-listed paths only, the user's own session); the browser
@@ -369,9 +369,44 @@ a written report, and **approval before the next phase**.
   their own report, no horizontal scroll on a phone). The PDF was also
   rendered to images and inspected page by page.
 
+**Phase 12 — Notifications.**
+- Tables `notifications` (per user; unique per user and event key, so an
+  event never notifies twice; push status) and `push_tokens`.
+- Notifications are written in the same transaction as the change that
+  causes them: PM scheduled or reassigned, site assigned, PM submitted,
+  approved or returned, PM overdue, critical failure (checklist, manual or
+  raised to critical), corrective action assigned, completed (to verify) and
+  sent back. Never to the person who acted or to inactive users.
+- Scheduled reminders (hourly job, once per event): PMs coming due and
+  overdue corrective actions — only when configured in Settings (both off by
+  default). The overdue-PM job now notifies too.
+- Push: the API's push sender (in the API process, like the overdue job;
+  safe on several instances — rows are claimed with one UPDATE) sends to
+  Expo's push service, retries when it cannot be reached, drops tokens Expo
+  reports as unregistered. **Off by default** (`PUSH_ENABLED=false`):
+  using Expo's push service is still an open decision (see below), so
+  nothing is sent to a third party until it is enabled.
+- Web: bell with the unread count in the header (refreshed on each page and
+  every minute), Notifications page (all / unread, open marks read and goes
+  to the record, mark all read), reminder settings in Settings.
+- Mobile: bell with the unread count in the tab headers, Notifications
+  screen (opens the related PM, action or site; the saved copy is shown
+  offline), push registration after sign-in (the status is on Profile),
+  tapping a push opens the related screen, sign-out unregisters the phone.
+  Registration needs the EAS project id (`eas init`) and FCM credentials;
+  until then the app says push is not set up and in-app notifications work.
+- Not in this phase: Expo push receipts (delivery confirmations) are not
+  polled; e-mail/SMS notifications are not part of the plan.
+- Verified: integration tests of every trigger, the reminders (off until
+  configured, once each), the user's endpoints and push tokens, and the push
+  sender against a fake Expo service (retry on failure, unregistered phones
+  removed, users without phones); a browser run (13 checks: bell count,
+  list, open and mark read, unread filter, mark all read, recipients per
+  role, reminder settings, phone width); the Android bundle builds.
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).
 2. VPS provider, OS and domain names (API and web).
-3. Push notifications through Expo's push service (a third-party service) — acceptable?
+3. Push notifications through Expo's push service (a third-party service) — acceptable? Implemented and off by default (`PUSH_ENABLED`); in-app notifications work without it.
 4. Keep the Supabase code in the repository as reference until each area is replaced (current plan), or delete it now.

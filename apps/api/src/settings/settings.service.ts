@@ -51,6 +51,19 @@ export const SETTINGS = {
       completionTargetPct: null,
     },
   },
+  /**
+   * Scheduled reminders. Off until configured: event notifications (PM
+   * submitted, action assigned, …) are always sent.
+   */
+  notifications: {
+    schema: z.strictObject({
+      /** Remind the technician this many days before a PM is due (null: no reminder). */
+      pmDueReminderDays: z.number().int().min(1).max(60).nullable(),
+      /** Tell the assignee and the site's supervisors once when a corrective action passes its due date. */
+      actionOverdueAlerts: z.boolean(),
+    }),
+    defaults: { pmDueReminderDays: null, actionOverdueAlerts: false },
+  },
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;

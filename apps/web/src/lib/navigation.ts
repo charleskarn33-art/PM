@@ -68,7 +68,7 @@ export const NAVIGATION: NavSection[] = [
   {
     title: 'Account',
     items: [
-      { label: 'Notifications', href: '/notifications', icon: 'notifications', plannedPhase: 12 },
+      { label: 'Notifications', href: '/notifications', icon: 'notifications' },
       { label: 'My Profile', href: '/profile', icon: 'profile' },
     ],
   },

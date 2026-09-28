@@ -9,6 +9,7 @@ import { parseInput } from '../common/validation.js';
 import { AppConfig } from '../config/app-config.js';
 import type { CorrectiveAction, Failure, Prisma } from '../generated/prisma/client.js';
 import { toDate, toIso, todayIn } from '../pm/dates.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import { ACTIVE_ACTION, actionNumber, failureNumber, failureStatus, failureTimestamps, nextActionStatus, type ActionStep } from './failure-rules.js';
@@ -59,7 +60,21 @@ export class FailuresService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly config: AppConfig,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /** Tells the assignee an action is theirs. */
+  private async notifyAssigned(tx: Tx, a: { id: string; number: number; title: string; dueDate: Date | null; site: { siteCode: string } }, assigneeId: string, actorId: string, key: string) {
+    await this.notifications.notify(tx, {
+      userIds: [assigneeId],
+      actorId,
+      type: 'ACTION_ASSIGNED',
+      title: `${actionNumber(a.number)} assigned to you`,
+      body: `${a.title} — ${a.site.siteCode}${a.dueDate ? `, due ${toIso(a.dueDate)}` : ''}`,
+      entity: { type: 'action', id: a.id },
+      key,
+    });
+  }
 
   // --- Scope ------------------------------------------------------------------------------
 
@@ -192,6 +207,7 @@ export class FailuresService {
           },
         });
         await tx.failureUpdate.create({ data: { failureId: failure.id, authorId: caller.id, kind: 'STATUS', toStatus: 'OPEN', body: 'Reported on site.' } });
+        await this.notifications.criticalFailures(tx, [failure.id], caller.id);
         return failure.id;
       })
       .catch(rethrowDbError);
@@ -212,6 +228,7 @@ export class FailuresService {
       if (!changes.length) return;
       await tx.failure.update({ where: { id }, data: { ...data, updatedById: caller.id } });
       await tx.failureUpdate.create({ data: { failureId: id, authorId: caller.id, kind: 'SYSTEM', body: changes.join(' ') } });
+      if (data.severity === 'CRITICAL' && f.severity !== 'CRITICAL') await this.notifications.criticalFailures(tx, [id], caller.id);
     });
     return this.get(id, caller);
   }
@@ -455,6 +472,7 @@ export class FailuresService {
           },
         });
         await this.refreshFailure(tx, f.id, caller.id);
+        if (assignee) await this.notifyAssigned(tx, { ...action, site: f.site }, assignee.id, caller.id, `action-assigned:${action.id}:${assignee.id}:${now.getTime()}`);
         return action.id;
       })
       .catch(rethrowDbError);
@@ -511,11 +529,14 @@ export class FailuresService {
       this.requireManages(caller, a.site.regionId);
       const assignee = await this.requireAssignee(tx, data.assignedToId, a.siteId);
       const reassigned = a.assignedToId !== assignee.id;
+      const now = new Date();
+      const dueDate = data.dueDate !== undefined ? (data.dueDate ? toDate(data.dueDate) : null) : a.dueDate;
+      await this.notifyAssigned(tx, { ...a, dueDate }, assignee.id, caller.id, `action-assigned:${a.id}:${assignee.id}:${now.getTime()}`);
       return {
         data: {
           assignedTo: { connect: { id: assignee.id } },
           assignedBy: { connect: { id: caller.id } },
-          assignedAt: new Date(),
+          assignedAt: now,
           ...(reassigned ? { startedAt: null } : {}),
           ...(data.dueDate !== undefined ? { dueDate: data.dueDate ? toDate(data.dueDate) : null } : {}),
         },
@@ -533,16 +554,26 @@ export class FailuresService {
 
   complete(id: string, input: unknown, caller: AuthUser) {
     const { note } = parseInput(NoteInput, input);
-    return this.step(id, 'complete', caller, async (_tx, a) => {
+    return this.step(id, 'complete', caller, async (tx, a) => {
       this.requireAssigned(a, caller);
-      return { data: { completedAt: new Date(), completedBy: { connect: { id: caller.id } }, completionNote: note }, body: note };
+      const now = new Date();
+      await this.notifications.notify(tx, {
+        userIds: [a.assignedById, ...(await this.notifications.siteSupervisors(tx, a.siteId))],
+        actorId: caller.id,
+        type: 'ACTION_COMPLETED',
+        title: `${actionNumber(a.number)} completed — to verify`,
+        body: `${caller.fullName} completed “${a.title}” at ${a.site.siteCode}: ${note}`,
+        entity: { type: 'action', id: a.id },
+        key: `action-completed:${a.id}:${now.getTime()}`,
+      });
+      return { data: { completedAt: now, completedBy: { connect: { id: caller.id } }, completionNote: note }, body: note };
     });
   }
 
   /** A supervisor checks the work: approve (verified) or send it back (in progress). Not by the person who did it. */
   verify(id: string, input: unknown, caller: AuthUser) {
     const data = parseInput(VerifyInput, input);
-    return this.step(id, data.decision === 'APPROVE' ? 'approve' : 'reject', caller, async (_tx, a) => {
+    return this.step(id, data.decision === 'APPROVE' ? 'approve' : 'reject', caller, async (tx, a) => {
       this.requireManages(caller, a.site.regionId);
       if (a.assignedToId === caller.id || a.completedById === caller.id) {
         throw new AppError(HttpStatus.FORBIDDEN, 'SAME_PERSON', 'The person who did the work cannot verify it.');
@@ -550,6 +581,15 @@ export class FailuresService {
       if (data.decision === 'APPROVE') {
         return { data: { verifiedAt: new Date(), verifiedBy: { connect: { id: caller.id } }, verificationNote: data.note ?? null }, body: data.note ?? 'Verified.' };
       }
+      await this.notifications.notify(tx, {
+        userIds: [a.assignedToId],
+        actorId: caller.id,
+        type: 'ACTION_RETURNED',
+        title: `${actionNumber(a.number)} sent back`,
+        body: `${caller.fullName}: ${data.note ?? 'the work needs more attention.'}`,
+        entity: { type: 'action', id: a.id },
+        key: `action-returned:${a.id}:${a.completedAt?.getTime() ?? 0}`,
+      });
       return { data: { completedAt: null, completedBy: { disconnect: true }, completionNote: null }, body: data.note };
     });
   }

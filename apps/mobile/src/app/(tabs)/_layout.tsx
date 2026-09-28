@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Tabs } from 'expo-router/js-tabs';
 import type { ComponentProps } from 'react';
 import type { ColorValue } from 'react-native';
+import { NotificationBell } from '@/components/notification-bell';
 import { useAuth } from '@/providers/auth-provider';
 import { colors } from '@/theme';
 
@@ -25,6 +26,7 @@ export default function TabsLayout() {
         tabBarInactiveTintColor: colors.textMuted,
         tabBarLabelStyle: { fontSize: 13, fontWeight: '600' },
         tabBarStyle: { minHeight: 64 },
+        headerRight: () => <NotificationBell />,
       }}
     >
       <Tabs.Screen name="index" options={tab('Home', 'home')} />

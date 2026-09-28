@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { z } from 'zod';
 import { invalid, notFound } from '../common/prisma-errors.js';
 import { parseInput } from '../common/validation.js';
@@ -6,6 +6,7 @@ import { AppError } from '../common/http-exception.filter.js';
 import type { AuthUser } from '../auth/auth-user.js';
 import { managesRegion } from '../authz/scope.js';
 import type { Prisma } from '../generated/prisma/client.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 
 const isoDate = z.iso.date().transform((d) => new Date(`${d}T00:00:00.000Z`));
@@ -32,7 +33,11 @@ const DAY = 86_400_000;
  */
 @Injectable()
 export class AssignmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    /** Absent only when the service is built by hand (seeds, test fixtures): nobody is notified then. */
+    @Optional() private readonly notifications?: NotificationsService,
+  ) {}
 
   /**
    * `caller` (from the API) limits changes to the caller's regions; site
@@ -80,9 +85,20 @@ export class AssignmentsService {
         }
       }
 
-      return tx.siteAssignment.create({
+      const created = await tx.siteAssignment.create({
         data: { siteId: data.siteId, userId: data.userId, role: data.role, startDate: data.startDate, assignedById: actorId },
       });
+      const info = await tx.site.findUniqueOrThrow({ where: { id: data.siteId }, select: { siteCode: true, siteName: true } });
+      await this.notifications?.notify(tx, {
+        userIds: [data.userId],
+        actorId,
+        type: 'SITE_ASSIGNED',
+        title: `Assigned to ${info.siteCode}`,
+        body: `You are the ${data.role === 'TECHNICIAN' ? 'technician' : 'supervisor'} for ${info.siteName} from ${data.startDate.toISOString().slice(0, 10)}.`,
+        entity: { type: 'site', id: data.siteId },
+        key: `site-assigned:${created.id}`,
+      });
+      return created;
     });
   }
 

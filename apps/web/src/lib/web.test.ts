@@ -48,7 +48,7 @@ describe('navigation', () => {
   });
   it('shows what later phases bring as not yet available', () => {
     const planned = navigationFor(ADMIN).flatMap((s) => s.items).filter((i) => i.plannedPhase).map((i) => `${i.label}:${i.plannedPhase}`);
-    expect(planned).toEqual(['Audit Log:13', 'Notifications:12']);
+    expect(planned).toEqual(['Audit Log:13']);
   });
   it('lands on the first page the user may open', () => {
     expect(homeFor(ADMIN)).toBe('/dashboard');

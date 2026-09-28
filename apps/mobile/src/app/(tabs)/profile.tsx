@@ -1,8 +1,10 @@
 import { ROLE_LABELS } from '@ipt/shared';
 import Constants from 'expo-constants';
+import { useSyncExternalStore } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SyncBar } from '@/components/sync-bar';
 import { Card, PrimaryButton } from '@/components/ui';
+import { PUSH_STATUS_TEXT, pushStatus } from '@/lib/push';
 import { useOffline } from '@/offline/offline-provider';
 import { useAuth } from '@/providers/auth-provider';
 import { colors, spacing } from '@/theme';
@@ -11,6 +13,7 @@ export default function ProfileScreen() {
   const { profile, signOut } = useAuth();
   const { counts, lastSyncAt, packSavedAt, syncNow, syncing } = useOffline();
   const unsent = counts.pending + counts.syncing + counts.errors;
+  const push = useSyncExternalStore(pushStatus.subscribe, pushStatus.get);
   const when = (iso: string | null) => (iso ? iso.slice(0, 16).replace('T', ' ') : 'not yet');
 
   function confirmSignOut() {
@@ -39,6 +42,7 @@ export default function ProfileScreen() {
         <PrimaryButton title="Sync now" variant="outline" loading={syncing} onPress={() => void syncNow()} />
       </Card>
       <Card>
+        <Row label="Push notifications" value={PUSH_STATUS_TEXT[push]} />
         <Row label="App version" value={Constants.expoConfig?.version ?? 'unknown'} />
       </Card>
       <PrimaryButton title="Sign out" variant="outline" onPress={confirmSignOut} />

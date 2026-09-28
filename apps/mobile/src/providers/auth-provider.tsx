@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { toAccountProfile, type AccountProfile, type ApiProfile } from '@/lib/account';
 import { sessionClient } from '@/lib/api/session';
 import { ApiError } from '@/lib/api/session-client';
+import { unregisterPush } from '@/lib/push';
 import { sessionStorage } from '@/lib/session-storage';
 
 export type AuthStatus = 'loading' | 'signed-out' | 'signed-in';
@@ -143,6 +144,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
+    // First, while still signed in: this phone stops receiving this user's notifications.
+    await unregisterPush();
     await sessionClient?.signOut();
   }, []);
 

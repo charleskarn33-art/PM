@@ -8,6 +8,7 @@ import { parseInput } from '../common/validation.js';
 import { AppConfig } from '../config/app-config.js';
 import { syncVisitFailures } from '../failures/failure-engine.js';
 import type { PmStatus, PmVisit, Prisma, SiteEquipment } from '../generated/prisma/client.js';
+import { NotificationsService } from '../notifications/notifications.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { StorageService } from '../storage/storage.service.js';
@@ -64,6 +65,7 @@ export class VisitsService {
     private readonly storage: StorageService,
     private readonly config: AppConfig,
     private readonly settings: SettingsService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // --- Start -----------------------------------------------------------------------
@@ -322,11 +324,12 @@ export class VisitsService {
         );
       }
       const progress = visitProgress(state);
+      const completedAt = new Date();
       await tx.pmVisit.update({
         where: { id: visitId },
         data: {
           status: 'COMPLETED',
-          completedAt: new Date(),
+          completedAt,
           completionPct: progress.completionPct,
           failureCount: progress.failureCount,
           reviewedById: null,
@@ -336,7 +339,18 @@ export class VisitsService {
       });
       if (visit.scheduleId) await tx.pmSchedule.update({ where: { id: visit.scheduleId }, data: { status: 'COMPLETED' } });
       // Failed answers become failures (idempotent: completing again updates, never duplicates).
-      await syncVisitFailures(tx, visit);
+      const failures = await syncVisitFailures(tx, visit);
+      const site = await tx.site.findUniqueOrThrow({ where: { id: visit.siteId }, select: { siteCode: true, siteName: true } });
+      await this.notifications.notify(tx, {
+        userIds: await this.notifications.siteSupervisors(tx, visit.siteId),
+        actorId: caller.id,
+        type: 'PM_SUBMITTED',
+        title: `PM ready for review: ${site.siteCode}`,
+        body: `${caller.fullName} completed the PM at ${site.siteName}${progress.failureCount ? ` with ${progress.failureCount} failure${progress.failureCount === 1 ? '' : 's'}` : ''}.`,
+        entity: { type: 'visit', id: visitId },
+        key: `pm-submitted:${visitId}:${completedAt.getTime()}`,
+      });
+      await this.notifications.criticalFailures(tx, [...failures.created, ...failures.updated], caller.id);
     });
     return this.get(visitId, caller);
   }
@@ -356,6 +370,17 @@ export class VisitsService {
         data: { status, reviewedById: caller.id, reviewedAt: new Date(), reviewComments: data.comments, updatedById: caller.id },
       });
       if (visit.scheduleId) await tx.pmSchedule.update({ where: { id: visit.scheduleId }, data: { status } });
+      const site = await tx.site.findUniqueOrThrow({ where: { id: visit.siteId }, select: { siteCode: true, siteName: true } });
+      const approved = status === 'APPROVED';
+      await this.notifications.notify(tx, {
+        userIds: [visit.technicianId],
+        actorId: caller.id,
+        type: approved ? 'PM_APPROVED' : 'PM_RETURNED',
+        title: approved ? `PM approved: ${site.siteCode}` : `PM returned for correction: ${site.siteCode}`,
+        body: approved ? `${caller.fullName} approved your PM at ${site.siteName}.` : `${caller.fullName}: ${data.comments ?? 'see the PM for what to correct.'}`,
+        entity: { type: 'visit', id: visitId },
+        key: `pm-reviewed:${visitId}:${visit.completedAt?.getTime() ?? 0}`,
+      });
     });
     return this.get(visitId, caller);
   }

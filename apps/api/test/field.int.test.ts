@@ -67,7 +67,7 @@ const setFence = (mode: string, radiusM = 100) => admin.put('/settings/geofence'
 
 describe('settings', () => {
   it('everyone signed in reads them; only administrators change them, validated', async () => {
-    expect((await tech.get('/settings').expect(200)).body.data).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true }, thresholds: NO_THRESHOLDS });
+    expect((await tech.get('/settings').expect(200)).body.data).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true }, thresholds: NO_THRESHOLDS, notifications: { pmDueReminderDays: null, actionOverdueAlerts: false } });
     await supervisor.put('/settings/geofence', { mode: 'BLOCK', radiusM: 50 }).expect(403);
     await admin.put('/settings/geofence', { mode: 'STRICT', radiusM: 50 }).expect(422);
     await admin.put('/settings/geofence', { mode: 'BLOCK', radiusM: 0 }).expect(422);
@@ -155,7 +155,7 @@ describe('field pack (offline data for the phone)', () => {
     const v = (await tech.post('/visits', { siteId: sites.located, gps: NEAR }).expect(201)).body.data;
     const pack = (await tech.get('/field/pack').expect(200)).body.data;
     expect(pack.userId).toBeTruthy();
-    expect(pack.settings).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true }, thresholds: NO_THRESHOLDS });
+    expect(pack.settings).toEqual({ geofence: { mode: 'WARN', radiusM: 100 }, pm: { requireSignature: true }, thresholds: NO_THRESHOLDS, notifications: { pmDueReminderDays: null, actionOverdueAlerts: false } });
     expect(pack.sites.map((s: { siteCode: string }) => s.siteCode)).toEqual(['G-1', 'G-2']);
     expect(pack.templates.length).toBeGreaterThan(0);
     const template = pack.templates[0];

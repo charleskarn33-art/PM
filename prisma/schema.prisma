@@ -83,6 +83,8 @@ model User {
   actionsCreated     CorrectiveAction[]  @relation("ActionCreatedBy")
   failureUpdates     FailureUpdate[]     @relation("FailureUpdateAuthor")
   failureAttachments FailureAttachment[] @relation("FailureAttachmentUploadedBy")
+  notifications      Notification[]      @relation("NotificationUser")
+  pushTokens         PushToken[]         @relation("PushTokenUser")
 
   // Audit back-relations (who created / changed what).
   usersCreated     User[]            @relation("UserCreatedBy")
@@ -1191,4 +1193,64 @@ model FailureAttachment {
   @@index([failureId, createdAt])
   @@index([correctiveActionId])
   @@map("failure_attachments")
+}
+
+// -----------------------------------------------------------------------------
+// Notifications (in-app, and push to the phone when push is enabled).
+// -----------------------------------------------------------------------------
+
+enum PushStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  NO_DEVICE
+  SKIPPED
+}
+
+model Notification {
+  id            String      @id @default(uuid(7)) @db.Char(36)
+  userId        String      @map("user_id") @db.Char(36)
+  /// What happened (PM_SUBMITTED, ACTION_ASSIGNED, ...).
+  type          String      @db.VarChar(40)
+  title         String      @db.VarChar(200)
+  body          String      @db.VarChar(1000)
+  /// The record it is about: visit, schedule, site, failure or action.
+  entityType    String?     @map("entity_type") @db.VarChar(20)
+  entityId      String?     @map("entity_id") @db.Char(36)
+  /// One notification per user and key: the same event never notifies twice.
+  dedupKey      String      @map("dedup_key") @db.VarChar(120)
+  readAt        DateTime?   @map("read_at")
+  /// Null: not to be pushed (push disabled when it was created).
+  pushStatus    PushStatus? @map("push_status")
+  pushClaim     String?     @map("push_claim") @db.Char(36)
+  pushClaimedAt DateTime?   @map("push_claimed_at")
+  pushAttempts  Int         @default(0) @map("push_attempts") @db.UnsignedTinyInt
+  pushedAt      DateTime?   @map("pushed_at")
+  pushError     String?     @map("push_error") @db.VarChar(255)
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  user User @relation("NotificationUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupKey])
+  @@index([userId, readAt, createdAt])
+  @@index([pushStatus, createdAt])
+  @@index([pushClaim])
+  @@map("notifications")
+}
+
+/// An Expo push token of a signed-in phone.
+model PushToken {
+  id         String   @id @default(uuid(7)) @db.Char(36)
+  userId     String   @map("user_id") @db.Char(36)
+  token      String   @unique @db.VarChar(255)
+  platform   String   @db.VarChar(20)
+  deviceName String?  @map("device_name") @db.VarChar(120)
+  createdAt  DateTime @default(now()) @map("created_at")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+
+  user User @relation("PushTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_tokens")
 }

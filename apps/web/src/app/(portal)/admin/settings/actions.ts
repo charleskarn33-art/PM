@@ -28,3 +28,13 @@ export async function saveThresholds(_prev: FormState, formData: FormData): Prom
   );
   return submit(formData, () => api('/settings/thresholds', { method: 'PUT', body }), 'Thresholds saved. Analytics flags use them from now on.', ['/admin/settings', '/analytics']);
 }
+
+export async function saveNotificationSettings(_prev: FormState, formData: FormData): Promise<FormState> {
+  await requirePermission('settings.manage');
+  const days = text(formData, 'pmDueReminderDays');
+  const body = {
+    pmDueReminderDays: days === undefined ? null : Number.isInteger(Number(days)) ? Number(days) : days,
+    actionOverdueAlerts: formData.get('actionOverdueAlerts') === 'on',
+  };
+  return submit(formData, () => api('/settings/notifications', { method: 'PUT', body }), 'Notification settings saved.', ['/admin/settings']);
+}
