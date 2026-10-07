@@ -1,4 +1,5 @@
-import { Catch, HttpException, HttpStatus, Logger, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
+import { Catch, HttpException, HttpStatus, Inject, Logger, Optional, type ArgumentsHost, type ExceptionFilter } from '@nestjs/common';
+import { AUDIT_REFUSALS, type AuditRefusals } from './audit-hook.js';
 import type { Request, Response } from 'express';
 import { ThrottlerException } from '@nestjs/throttler';
 import { ZodError } from 'zod';
@@ -64,7 +65,9 @@ export class AppError extends HttpException {
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger('HttpExceptionFilter');
 
-  catch(exception: unknown, host: ArgumentsHost): void {
+  constructor(@Optional() @Inject(AUDIT_REFUSALS) private readonly refusals?: AuditRefusals) {}
+
+  async catch(exception: unknown, host: ArgumentsHost): Promise<void> {
     const http = host.switchToHttp();
     const req = http.getRequest<Request & { id?: string }>();
     const res = http.getResponse<Response>();
@@ -105,6 +108,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
       this.logger.error({ err: exception, requestId }, 'Unhandled error');
     }
 
+    // Refusals (and failed sign-ins) go in the audit log before the answer is sent.
+    if (this.refusals && (status === HttpStatus.FORBIDDEN || status === HttpStatus.UNAUTHORIZED || status === HttpStatus.LOCKED)) {
+      await this.refusals.record(req, status, code);
+    }
     const body: ErrorBody = { error: { code, message, ...(details === undefined ? {} : { details }), requestId } };
     res.status(status).json(body);
   }

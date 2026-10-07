@@ -10,6 +10,7 @@ const DATA_TABLES = [
   'system_settings',
   'notifications',
   'push_tokens',
+  'audit_logs', // TRUNCATE does not fire the append-only triggers (tests only)
   'failure_attachments',
   'failure_updates',
   'corrective_actions',

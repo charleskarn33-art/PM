@@ -281,7 +281,7 @@ a written report, and **approval before the next phase**.
   versions, sections, questions, readings and consistency rules; settings);
   global search in the header.
 - Navigation follows the API permissions. Analytics (done in Phase 10), Reports
-  (done in Phase 11), Notifications (done in Phase 12) and the Audit log (Phase 13) are shown
+  (done in Phase 11), Notifications (done in Phase 12) and the Audit log (done in Phase 13) were shown
   as not yet available instead of pages on the old backend.
 - Photos, signatures and attachments reach the browser through the web server
   (`/files/…`, allow-listed paths only, the user's own session); the browser
@@ -403,6 +403,37 @@ a written report, and **approval before the next phase**.
   removed, users without phones); a browser run (13 checks: bell count,
   list, open and mark read, unread filter, mark all read, recipients per
   role, reminder settings, phone width); the Android bundle builds.
+
+**Phase 13 — Audit.**
+- Table `audit_logs`, append-only: MySQL triggers refuse UPDATE and DELETE
+  (for the API's own database user too). No foreign key to users, so entries
+  outlive the people in them; name and e-mail are kept as they were.
+- Coverage by construction: a global interceptor records every change made
+  through the API (every POST / PUT / PATCH / DELETE route is listed in
+  `audit/audit-actions.ts` with a readable action, or skipped with a reason —
+  a test compares the list with the running app's routes), plus PM report
+  downloads and CSV exports. The exception filter records refused requests
+  (403, reads included — also those refused by the permission guard before
+  any handler runs) and failed or locked sign-ins.
+- Each entry: who, when, action, record, summary, request path, IP, user
+  agent, request id, what was sent (secrets never: passwords, tokens,
+  signature strokes; long values and lists shortened), and field-level
+  before → after for edits of users (with roles and regions), organisation,
+  sites, assignments, settings, template parts, schedules, visits, failures
+  and corrective actions.
+- If writing an entry fails, the error is logged (the change already
+  happened); the entry is not in the same transaction as the change.
+- API: `GET /audit` (filters: text, action, record type and id, person,
+  outcome, dates), `GET /audit/:id`, `GET /audit/actions`,
+  `GET /audit/export.csv` — `audit.read` (Super Admin).
+- Web: Audit log page (filters, who / what / record / outcome, a record's
+  or a person's full history), entry page (fields before and after, what was
+  sent, IP, request id), CSV export; "History" links on sites, users and PM
+  visits for those who may read the log.
+- Not recorded: session renewals, one's own notification reads and phone
+  registrations, requests refused by validation (nothing changed), and the
+  API's own scheduled jobs (overdue marking, reminders, push). Entries are
+  kept indefinitely; no retention period is configured.
 
 ## 6. Open decisions (do not block Phase 1)
 

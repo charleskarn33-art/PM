@@ -46,9 +46,11 @@ describe('navigation', () => {
     expect(labels(SUPERVISOR)).toContain('Technicians');
     expect(labels(MAINTENANCE)).toEqual(['Sites', 'Failures', 'Corrective Actions', 'Notifications', 'My Profile']);
   });
-  it('shows what later phases bring as not yet available', () => {
+  it('has no items waiting for a later phase any more', () => {
     const planned = navigationFor(ADMIN).flatMap((s) => s.items).filter((i) => i.plannedPhase).map((i) => `${i.label}:${i.plannedPhase}`);
-    expect(planned).toEqual(['Audit Log:13']);
+    expect(planned).toEqual([]);
+    expect(labels(ADMIN)).toContain('Audit Log');
+    expect(labels(SUPERVISOR)).not.toContain('Audit Log');
   });
   it('lands on the first page the user may open', () => {
     expect(homeFor(ADMIN)).toBe('/dashboard');

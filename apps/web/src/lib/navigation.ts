@@ -62,7 +62,7 @@ export const NAVIGATION: NavSection[] = [
       { label: 'Organization', href: '/admin/organization', icon: 'organization', permissions: ['org.manage'] },
       { label: 'PM Templates', href: '/admin/templates', icon: 'templates', permissions: ['pm_templates.manage'] },
       { label: 'Settings', href: '/admin/settings', icon: 'settings', permissions: ['settings.manage'] },
-      { label: 'Audit Log', href: '/admin/audit', icon: 'audit', permissions: ['audit.read'], plannedPhase: 13 },
+      { label: 'Audit Log', href: '/admin/audit', icon: 'audit', permissions: ['audit.read'] },
     ],
   },
   {

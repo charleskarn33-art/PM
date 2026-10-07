@@ -1,5 +1,5 @@
 import { humanizeStatus, PM_STATUS_TONE, SEVERITY_TONE, FAILURE_STATUS_TONE } from '@ipt/shared';
-import { Pencil } from 'lucide-react';
+import { History, Pencil } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { PageHeader } from '@/components/page-header';
@@ -44,12 +44,20 @@ export default async function SitePage({ params }: { params: Promise<{ id: strin
         title={`${site.siteCode} · ${site.siteName}`}
         description={[site.region?.name, site.cluster?.name, site.county?.name].filter(Boolean).join(' · ')}
         actions={
-          can('sites.manage') && session.isGlobal ? (
-            <Link href={`/sites/${site.id}/edit`} className={buttonVariants({ variant: 'outline' })}>
-              <Pencil aria-hidden />
-              Edit
-            </Link>
-          ) : null
+          <>
+            {can('audit.read') ? (
+              <Link href={`/admin/audit?entityType=site&entityId=${site.id}`} className={buttonVariants({ variant: 'ghost' })}>
+                <History aria-hidden />
+                History
+              </Link>
+            ) : null}
+            {can('sites.manage') && session.isGlobal ? (
+              <Link href={`/sites/${site.id}/edit`} className={buttonVariants({ variant: 'outline' })}>
+                <Pencil aria-hidden />
+                Edit
+              </Link>
+            ) : null}
+          </>
         }
       />
       <div className="flex flex-wrap gap-2">

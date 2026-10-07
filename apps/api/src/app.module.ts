@@ -6,6 +6,8 @@ import type { Request } from 'express';
 import type { IncomingMessage } from 'node:http';
 import { AnalyticsModule } from './analytics/analytics.module.js';
 import { AssignmentsModule } from './assignments/assignments.module.js';
+import { AuditInterceptor } from './audit/audit.interceptor.js';
+import { AuditModule } from './audit/audit.module.js';
 import { AuthModule } from './auth/auth.module.js';
 import { JwtAuthGuard } from './auth/jwt-auth.guard.js';
 import { AuthzModule } from './authz/authz.module.js';
@@ -63,6 +65,7 @@ export class AppModule {
           ],
         }),
         PrismaModule,
+        AuditModule,
         StorageModule,
         SettingsModule,
         NotificationsModule,
@@ -82,6 +85,8 @@ export class AppModule {
       providers: [
         { provide: APP_FILTER, useClass: HttpExceptionFilter },
         { provide: APP_INTERCEPTOR, useClass: ResponseEnvelopeInterceptor },
+        // Registered after the envelope, so it runs inside it and sees the handler's own result.
+        { provide: APP_INTERCEPTOR, useExisting: AuditInterceptor },
         // Order matters: rate limiting runs before authentication.
         { provide: APP_GUARD, useClass: ThrottlerGuard },
         { provide: APP_GUARD, useExisting: JwtAuthGuard },

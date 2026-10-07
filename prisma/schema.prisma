@@ -1254,3 +1254,43 @@ model PushToken {
   @@index([userId])
   @@map("push_tokens")
 }
+
+// -----------------------------------------------------------------------------
+// Audit log: append-only (database triggers refuse UPDATE and DELETE).
+// -----------------------------------------------------------------------------
+
+enum AuditOutcome {
+  SUCCESS
+  DENIED
+  FAILED
+}
+
+model AuditLog {
+  id         String       @id @default(uuid(7)) @db.Char(36)
+  occurredAt DateTime     @default(now()) @map("occurred_at")
+  /// Who acted (no foreign key: the entry outlives the user). Null: the system or an unknown caller.
+  actorId    String?      @map("actor_id") @db.Char(36)
+  actorName  String?      @map("actor_name") @db.VarChar(120)
+  actorEmail String?      @map("actor_email") @db.VarChar(255)
+  /// e.g. visit.review, user.deactivate, auth.login_failed
+  action     String       @db.VarChar(60)
+  outcome    AuditOutcome @default(SUCCESS)
+  entityType String?      @map("entity_type") @db.VarChar(40)
+  entityId   String?      @map("entity_id") @db.VarChar(64)
+  summary    String       @db.VarChar(500)
+  method     String       @db.VarChar(8)
+  path       String       @db.VarChar(255)
+  /// Changed fields: { field: { from, to } }.
+  changes    Json?
+  /// What was sent (passwords, tokens and signatures removed; long values shortened).
+  request    Json?
+  ip         String?      @db.VarChar(64)
+  userAgent  String?      @map("user_agent") @db.VarChar(255)
+  requestId  String?      @map("request_id") @db.VarChar(64)
+
+  @@index([occurredAt])
+  @@index([entityType, entityId, occurredAt])
+  @@index([actorId, occurredAt])
+  @@index([action, occurredAt])
+  @@map("audit_logs")
+}

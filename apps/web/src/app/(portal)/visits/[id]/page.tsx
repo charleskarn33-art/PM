@@ -123,6 +123,11 @@ export default async function VisitPage({ params, searchParams }: { params: Prom
               <FileText aria-hidden />
               PM report (PDF)
             </a>
+            {hasPermission(session, 'audit.read') ? (
+              <Link href={`/admin/audit?entityType=visit&entityId=${v.id}`} className={buttonVariants({ variant: 'ghost' })}>
+                History
+              </Link>
+            ) : null}
           </>
         }
       />

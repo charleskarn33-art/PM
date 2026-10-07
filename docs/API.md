@@ -300,6 +300,39 @@ service cannot be reached; not sent when older than 24 hours; phones Expo
 reports as no longer registered are removed). With push disabled (the
 default) nothing is sent to Expo and notifications are in-app only.
 
+## Audit log
+
+| Method | Path | Permission |
+|---|---|---|
+| GET | `/audit?q&action&entityType&entityId&actorId&outcome&from&to&page&pageSize` | `audit.read` — newest first, without the request body and changes; `q` matches the person, summary, path, record id or request id |
+| GET | `/audit/:id` | `audit.read` — one entry with `changes` (`{ field: { from, to } }`) and `request` (what was sent) |
+| GET | `/audit/actions` | `audit.read` — action codes and their labels |
+| GET | `/audit/export.csv?…` | `audit.read` — every entry matching the filters (recorded as an export) |
+
+What is recorded (by the API itself, for every client):
+
+- **Every change** made through the API — every POST, PUT, PATCH and DELETE
+  route is listed in `apps/api/src/audit/audit-actions.ts`, and a test fails
+  if a route is added without being listed. Each entry has who (id, name and
+  email at the time), when, the action, the record, a summary, the request
+  path, IP, user agent and request id, and **what was sent** (route
+  parameters, query and body).
+- **Field-level changes** (before → after) for edits of users (including
+  roles and regions), regions, clusters, counties, sites, assignments,
+  settings, template parts, schedules, PM visits (complete, review),
+  failures and corrective actions.
+- **Refused attempts** (403 on any route, reads included) and **failed or
+  locked sign-ins** (with the e-mail tried).
+- **Data handed out:** PM report PDFs, CSV exports and audit exports.
+- Not recorded: session renewals, marking one's own notifications read,
+  phone registrations for push; failed validation (nothing changed).
+- **Never recorded:** passwords, tokens, secrets, signature strokes
+  (replaced by `[not recorded]`); long values and lists are shortened.
+
+The table is **append-only**: database triggers refuse any UPDATE or DELETE
+on `audit_logs`, for the API's own database user too. Entries are kept
+indefinitely (no retention period is configured).
+
 ## Field pack (offline data for the phone)
 
 | Method | Path | Permission |

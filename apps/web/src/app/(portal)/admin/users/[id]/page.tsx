@@ -1,11 +1,13 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { PageHeader } from '@/components/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { load } from '@/lib/api/data';
 import type { Region } from '@/lib/api/types';
-import { requirePermission } from '@/lib/auth';
+import { hasPermission, requirePermission } from '@/lib/auth';
 import { formatDateTime } from '@/lib/format';
 import { AccountButton, DetailsForm, RegionsForm, RolesForm, TemporaryPasswordForm } from '../user-forms';
 
@@ -49,6 +51,16 @@ export default async function UserPage({ params, searchParams }: { params: Promi
             {u.mustChangePassword ? <Badge tone="warning">Must change password</Badge> : null}
             {locked ? <Badge tone="danger">Sign-in locked</Badge> : null}
             {u.isDemo ? <Badge tone="neutral">Demo</Badge> : null}
+            {hasPermission(session, 'audit.read') ? (
+              <>
+                <Link href={`/admin/audit?entityType=user&entityId=${u.id}`} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+                  Changes to this user
+                </Link>
+                <Link href={`/admin/audit?actorId=${u.id}`} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+                  What they did
+                </Link>
+              </>
+            ) : null}
           </>
         }
       />
