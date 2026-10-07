@@ -1,5 +1,6 @@
 import { ROLE_LABELS } from '@ipt/shared';
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import { useSyncExternalStore } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SyncBar } from '@/components/sync-bar';
@@ -41,6 +42,7 @@ export default function ProfileScreen() {
         <Row label="Offline data (sites, PMs, checklists) saved" value={when(packSavedAt)} />
         <PrimaryButton title="Sync now" variant="outline" loading={syncing} onPress={() => void syncNow()} />
       </Card>
+      <PrimaryButton title="App introduction" variant="outline" onPress={() => router.push('/introduction')} />
       <Card>
         <Row label="Push notifications" value={PUSH_STATUS_TEXT[push]} />
         <Row label="App version" value={Constants.expoConfig?.version ?? 'unknown'} />

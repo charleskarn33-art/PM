@@ -28,6 +28,15 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b1f3a",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain"
+        }
+      ],
       "expo-secure-store",
       "expo-sqlite",
       [

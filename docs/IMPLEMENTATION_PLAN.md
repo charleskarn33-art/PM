@@ -435,6 +435,22 @@ a written report, and **approval before the next phase**.
   API's own scheduled jobs (overdue marking, reminders, push). Entries are
   kept indefinitely; no retention period is configured.
 
+**Field app — launch screen and introduction** (added on request after Phase 13).
+- Native launch screen (`expo-splash-screen`): the brand tile (white bolt
+  on red, `assets/splash-icon.png`) on navy. It stays up until the app has
+  drawn its own launch screen with the same logo in the same place, which
+  adds the app name, version and what it is doing while the session is
+  restored and the phone's offline data is opened, then fades out.
+- Introduction (onboarding) on the first start, before sign-in, in four
+  swipeable pages: PMs at your sites; works without signal; camera and
+  location (why the app asks); failures and corrective actions. Skip at any
+  time; remembered per phone (shown again only if a new version of the
+  introduction is published). Profile → "App introduction" shows it again.
+  People already signed in when the update arrives do not get it.
+- Checked: unit tests of the remembered state, typecheck, lint, the Android
+  bundle, and `expo prebuild` (the Android launch screen resources are
+  generated). Not yet seen on a physical phone.
+
 ## 6. Open decisions (do not block Phase 1)
 
 1. Web hosting: Vercel or the VPS (both kept possible).

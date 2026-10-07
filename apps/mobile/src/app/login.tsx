@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Banner, PrimaryButton } from '@/components/ui';
 import { useAuth } from '@/providers/auth-provider';
@@ -29,9 +29,7 @@ export default function LoginScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           <View style={styles.brand}>
-            <View style={styles.logo}>
-              <Text style={styles.logoText}>⚡</Text>
-            </View>
+            <Image source={require('../../assets/splash-icon.png')} style={styles.logo} resizeMode="contain" accessibilityIgnoresInvertColors />
             <Text style={styles.title}>IPT PowerTech</Text>
             <Text style={styles.subtitle}>Preventive Maintenance · Field App</Text>
           </View>
@@ -77,15 +75,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.navy },
   container: { flexGrow: 1, justifyContent: 'center', padding: spacing.xl },
   brand: { alignItems: 'center', marginBottom: spacing.xl },
-  logo: {
-    width: 64,
-    height: 64,
-    borderRadius: radius.lg,
-    backgroundColor: colors.red,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoText: { fontSize: 32, color: colors.white },
+  logo: { width: 88, height: 88 },
   title: { color: colors.white, fontSize: 26, fontWeight: '800', marginTop: spacing.md },
   subtitle: { color: '#c9d4e5', fontSize: 15, marginTop: spacing.xs },
   form: { backgroundColor: colors.card, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.sm },
